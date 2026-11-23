@@ -16,9 +16,9 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "commands/trigger.h"
-#include "common/hashfn.h"
 #include "executor/spi.h"
 #include "funcapi.h"
+#include "optimizer/optimizer.h"
 #include "optimizer/plancat.h"
 #include "optimizer/planner.h"
 #include "parser/parse_oper.h"
@@ -33,6 +33,7 @@
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
 #include "utils/syscache.h"
+#include "utils/typcache.h"
 #include "miscadmin.h"
 #include "utils/rel.h"
 #include "access/htup_details.h"
@@ -48,17 +49,6 @@ PG_MODULE_MAGIC;
 #define ELEVEL_BADSTATS		LOG		/* log level for invalid statistics */
 
 #define MAX_REL_CACHE		50		/* expected max # of rel stats entries */
-
-/*
- * acl_ok of the returning VariableStatData must be set if set_acl_okk is
- * true. The code is compiled only if the compile target PG version is match
- * the above conditions. Conversely, acl_ok is added to the end of
- * VariableStatData so we can safely omit setting it when the PG version
- * pg_dbms_stats is loaded onto is out of the conditions.
- */
-static	bool set_acl_ok = false;
-
-#define get_attrs(pgatt_attrs) (&(pgatt_attrs))
 
 /* Relation statistics cache entry */
 typedef struct StatsRelationEntry
@@ -157,14 +147,13 @@ extern Datum dbms_stats_type_is_analyzable(PG_FUNCTION_ARGS);
 extern Datum dbms_stats_anyarray_basetype(PG_FUNCTION_ARGS);
 
 static HeapTuple dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs,
-	TupleDesc tupledesc);
+	TupleDesc lhsdesc, TupleDesc rhsdesc, TupleDesc retdesc);
 static void dbms_stats_check_tg_event(FunctionCallInfo fcinfo,
 	TriggerData *trigdata, HeapTuple *invtup, HeapTuple *rettup);
 static void dbms_stats_invalidate_cache_internal(Oid relid, bool sta_col);
 
 /* Module callbacks */
 void	_PG_init(void);
-void	_PG_fini(void);
 
 /* hook functions */
 static void dbms_stats_get_relation_info(PlannerInfo *root, Oid relid,
@@ -233,23 +222,6 @@ _PG_init(void)
 	}
 #endif
 
-	{
-		/*
-		 * Check the PG version this module loaded onto. This aid is required
-		 * for binary backward compatibility within a major PG version.
-		 */
-		int major_version = PG_VERSION_NUM / 100;
-		int minor_version = PG_VERSION_NUM % 100;
-
-		if (major_version >= 1000 ||
-			(major_version == 906 && minor_version >= 3) ||
-			(major_version == 905 && minor_version >= 7) ||
-			(major_version == 904 && minor_version >= 12) ||
-			(major_version == 903 && minor_version >= 17) ||
-			(major_version == 902 && minor_version >= 21))
-			set_acl_ok = true;
-	}
-
 	/* Define custom GUC variables. */
 	DefineCustomBoolVariable("pg_dbms_stats.use_locked_stats",
 							 "Enable user defined statistics.",
@@ -262,7 +234,7 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	EmitWarningsOnPlaceholders("pg_dbms_stats");
+	MarkGUCPrefixReserved("pg_dbms_stats");
 
 	/* Back up old hooks, and install ours. */
 	prev_get_relation_info = get_relation_info_hook;
@@ -281,22 +253,6 @@ _PG_init(void)
 
 	/* Also set up a callback for relcache SI invalidations */
 	CacheRegisterRelcacheCallback(statscache_rel_callback, (Datum) 0);
-}
-
-/*
- * Module unload callback
- */
-void
-_PG_fini(void)
-{
-	/* Restore old hooks. */
-	get_relation_info_hook = prev_get_relation_info;
-	get_attavgwidth_hook = prev_get_attavgwidth;
-	get_relation_stats_hook = prev_get_relation_stats;
-	get_index_stats_hook = prev_get_index_stats;
-	planner_hook = prev_planner_hook;
-
-	/* A function to unregister callback for relcache is NOT provided. */
 }
 
 /*
@@ -418,7 +374,9 @@ dbms_stats_merge(PG_FUNCTION_ARGS)
 {
 	HeapTupleData	lhs;
 	HeapTupleData	rhs;
-	TupleDesc		tupdesc;
+	TupleDesc		lhsdesc = NULL;
+	TupleDesc		rhsdesc = NULL;
+	TupleDesc		retdesc;
 	HeapTuple		ret = NULL;
 
 	/* assign HeapTuple of the left statistics data unless null. */
@@ -438,11 +396,27 @@ dbms_stats_merge(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	/* build a tuple descriptor for our result type */
-	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+	if (get_call_result_type(fcinfo, NULL, &retdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
 
+	/*
+	 * PostgreSQL 18 refuses to deform a composite datum with a descriptor
+	 * whose attribute types differ. column_stats_locked stores stavalues*
+	 * as dbms_stats.anyarray, while pg_statistic stores them as anyarray,
+	 * so each input is deformed with its own row type. The merged tuple is
+	 * formed with the declared return type.
+	 */
+	if (lhs.t_data != NULL)
+		lhsdesc = lookup_rowtype_tupdesc_copy(
+			HeapTupleHeaderGetTypeId(lhs.t_data),
+			HeapTupleHeaderGetTypMod(lhs.t_data));
+	if (rhs.t_data != NULL)
+		rhsdesc = lookup_rowtype_tupdesc_copy(
+			HeapTupleHeaderGetTypeId(rhs.t_data),
+			HeapTupleHeaderGetTypMod(rhs.t_data));
+
 	/* merge two statistics tuples into one, and return it */
-	ret = dbms_stats_merge_internal(&lhs, &rhs, tupdesc);
+	ret = dbms_stats_merge_internal(&lhs, &rhs, lhsdesc, rhsdesc, retdesc);
 
 	if (ret)
 		PG_RETURN_DATUM(HeapTupleGetDatum(ret));
@@ -453,13 +427,15 @@ dbms_stats_merge(PG_FUNCTION_ARGS)
 /*
  * dbms_stats_merge_internal
  *   merge the dummy statistic (lhs) and the true statistic (rhs), on the basis
- *   of given TupleDesc.
+ *   of the two input row types. The result is formed with retdesc.
  *
  *   this function doesn't become an error level of ERROR to meet that the 
  *   result of the SQL is not affected by the query plan.
  */
 static HeapTuple
-dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
+dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs,
+						  TupleDesc lhsdesc, TupleDesc rhsdesc,
+						  TupleDesc retdesc)
 {
 	Datum			values[Natts_pg_statistic];
 	bool			nulls[Natts_pg_statistic];
@@ -477,7 +453,7 @@ dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
 	if (lhs == NULL || lhs->t_data == NULL)
 	{
 		/* use right tuple */
-		heap_deform_tuple(rhs, tupdesc, values, nulls);
+		heap_deform_tuple(rhs, rhsdesc, values, nulls);
 		for (i = 0; i < Anum_pg_statistic_staop1 + STATISTIC_NUM_SLOTS - 1; i++)
 			if (nulls[i])
 				return NULL;	/* check null constraints */
@@ -485,7 +461,7 @@ dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
 	else if (rhs == NULL || rhs->t_data == NULL)
 	{
 		/* use left tuple */
-		heap_deform_tuple(lhs, tupdesc, values, nulls);
+		heap_deform_tuple(lhs, lhsdesc, values, nulls);
 		for (i = 0; i < Anum_pg_statistic_staop1 + STATISTIC_NUM_SLOTS - 1; i++)
 			if (nulls[i])
 				return NULL;	/* check null constraints */
@@ -497,19 +473,19 @@ dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
 		 * statistics except the slot, use it.  Otherwise we use the column
 		 * value of the true statistic.
 		 */
-		heap_deform_tuple(lhs, tupdesc, values, nulls);
+		heap_deform_tuple(lhs, lhsdesc, values, nulls);
 		for (i = 0; i < Anum_pg_statistic_stakind1 - 1; i++)
 		{
 			if (nulls[i])
 			{
-				values[i] = fastgetattr(rhs, i + 1, tupdesc, &nulls[i]);
+				values[i] = fastgetattr(rhs, i + 1, rhsdesc, &nulls[i]);
 				if (nulls[i])
 				{
 					ereport(ELEVEL_BADSTATS,
 						(errmsg("pg_dbms_stats: bad statistics"),
 						 errdetail("column \"%s\" should not be null",
 							get_attname(StatisticRelationId,
-										get_attrs(tupdesc->attrs[i])->attnum,
+										TupleDescAttr(rhsdesc, i)->attnum,
 										true))));
 					return NULL;	/* should not be null */
 				}
@@ -529,7 +505,7 @@ dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
 					 i < Anum_pg_statistic_stavalues1 + STATISTIC_NUM_SLOTS - 1;
 					 i++)
 				{
-					values[i] = fastgetattr(rhs, i + 1, tupdesc, &nulls[i]);
+					values[i] = fastgetattr(rhs, i + 1, rhsdesc, &nulls[i]);
 					if (i < Anum_pg_statistic_staop1 + STATISTIC_NUM_SLOTS - 1 &&
 						nulls[i])
 					{
@@ -537,7 +513,7 @@ dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
 							(errmsg("pg_dbms_stats: bad statistics"),
 							 errdetail("column \"%s\" should not be null",
 								get_attname(StatisticRelationId,
-									get_attrs(tupdesc->attrs[i])->attnum,
+									TupleDescAttr(rhsdesc, i)->attnum,
 									true))));
 						return NULL;	/* should not be null */
 					}
@@ -569,8 +545,19 @@ dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
 	}
 	for (i = 0; i < STATISTIC_NUM_SLOTS; i++)
 	{
-		if ((i + 1 == STATISTIC_KIND_MCV ||
-			 i + 1 == STATISTIC_KIND_HISTOGRAM) &&
+		int16		stakind;
+
+		/*
+		 * Compare the slot's stakind, not its index. Range statistics use
+		 * slots 1 and 2 for kinds 6 and 7, whose array element type is not
+		 * the column type. Treating those slots as MCV or histogram made
+		 * dbms_stats.merge drop the whole row.
+		 */
+		if (nulls[Anum_pg_statistic_stakind1 + i - 1])
+			continue;
+		stakind = DatumGetInt16(values[Anum_pg_statistic_stakind1 + i - 1]);
+		if ((stakind == STATISTIC_KIND_MCV ||
+			 stakind == STATISTIC_KIND_HISTOGRAM) &&
 			!nulls[Anum_pg_statistic_stavalues1 + i - 1])
 		{
 			ArrayType  *arr;
@@ -597,7 +584,7 @@ dbms_stats_merge_internal(HeapTuple lhs, HeapTuple rhs, TupleDesc tupdesc)
 		}
 	}
 
-	return heap_form_tuple(tupdesc, values, nulls);
+	return heap_form_tuple(retdesc, values, nulls);
 }
 
 /*
@@ -939,19 +926,11 @@ dbms_stats_get_relation_stats(PlannerInfo *root,
 		if (HeapTupleIsValid(tuple))
 		{
 			vardata->freefunc = FreeHeapTuple;
-
-			/*
-			 * set acl_ok if required. See the definition of set_acl_ok for
-			 * details.
-			 */
-			if (set_acl_ok)
-			 {
-				 vardata->acl_ok =
-					 (pg_class_aclcheck(rte->relid, GetUserId(),
-										ACL_SELECT) == ACLCHECK_OK) ||
-					 (pg_attribute_aclcheck(rte->relid, attnum, GetUserId(),
-											ACL_SELECT) == ACLCHECK_OK);
-			 }
+			vardata->acl_ok =
+				(pg_class_aclcheck(rte->relid, GetUserId(),
+								   ACL_SELECT) == ACLCHECK_OK) ||
+				(pg_attribute_aclcheck(rte->relid, attnum, GetUserId(),
+									   ACL_SELECT) == ACLCHECK_OK);
 
 			return true;
 		}
@@ -986,16 +965,12 @@ dbms_stats_get_index_stats(PlannerInfo *root,
 		goto next_plugin;
 
 	vardata->freefunc = FreeHeapTuple;
-			
+
 	/*
-	 * set acl_ok if required. See the definition of set_acl_ok for details.
+	 * XXX: we had to scan the whole the rel array since we got
+	 * only the oid of the index.
 	 */
-	if (set_acl_ok)
 	{
-		/*
-		 * XXX: we had to scan the whole the rel array since we got
-		 * only the oid of the index.
-		 */
 		int i;
 
 		/* don't stop by this misassumption */
@@ -1314,10 +1289,26 @@ get_merged_column_stats(Oid relid, AttrNumber attnum, bool inh)
 			
 			if (exec_success)
 			{
-				/* merge the dummy statistics with the system statistics */
+				TupleDesc	rhsdesc = NULL;
+
+				/*
+				 * The syscache tuple is a pg_statistic heap tuple, not a
+				 * composite datum, so its descriptor comes from pg_statistic
+				 * rather than from the datum header. The locked row uses the
+				 * SPI descriptor. Form the result with that same descriptor,
+				 * matching the pre-18 behavior of this cache.
+				 */
+				if (HeapTupleIsValid(statsTuple))
+					rhsdesc = lookup_rowtype_tupdesc_copy(
+						get_rel_type_id(StatisticRelationId), -1);
+
 				tuple = dbms_stats_merge_internal(SPI_tuptable->vals[0],
 												  statsTuple,
+												  SPI_tuptable->tupdesc,
+												  rhsdesc,
 												  SPI_tuptable->tupdesc);
+				if (rhsdesc)
+					FreeTupleDesc(rhsdesc);
 			}
 			else
 				tuple = NULL;
@@ -1609,11 +1600,10 @@ init_rel_stats(void)
 	MemSet(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(Oid);
 	ctl.entrysize = sizeof(StatsRelationEntry);
-	ctl.hash = oid_hash;
 	ctl.hcxt = CacheMemoryContext;
 	hash = hash_create("dbms_stats relation statistics cache",
 					   MAX_REL_CACHE,
-					   &ctl, HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION);
+					   &ctl, HASH_ELEM | HASH_CONTEXT | HASH_BLOBS);
 
 	rel_stats = hash;
 }
@@ -1653,7 +1643,7 @@ init_rel_stats_entry(StatsRelationEntry *entry, Oid relid)
  * the attribute widths for estimation purposes.
  *
  * Note: This function is copied from plancat.c in core source tree of version
- * 14, and customized for pg_dbms_stats.  Changes from original one are:
+ * 18, and customized for pg_dbms_stats.  Changes from original one are:
  *   - rename by prefixing dbms_stats_
  *   - add 1 parameters (curpage) to pass dummy curpage values.
  *   - Get current # of pages only when supplied curpages is InvalidBlockNumber
@@ -1669,125 +1659,112 @@ dbms_stats_estimate_rel_size(Relation rel, int32 *attr_widths,
 	BlockNumber relallvisible;
 	double		density;
 
-	switch (rel->rd_rel->relkind)
+	if (RELKIND_HAS_TABLE_AM(rel->rd_rel->relkind))
 	{
-		case RELKIND_RELATION:
-		case RELKIND_MATVIEW:
-		case RELKIND_TOASTVALUE:
-			/* it has storage, ok to call the smgr */
-			if (curpages == InvalidBlockNumber)
-				curpages = RelationGetNumberOfBlocks(rel);
+		/* it has storage, ok to call the smgr */
+		if (curpages == InvalidBlockNumber)
+			curpages = RelationGetNumberOfBlocks(rel);
 
-			dbms_stats_table_relation_estimate_size(rel, attr_widths, pages, tuples,
-										 allvisfrac,
-										 HEAP_OVERHEAD_BYTES_PER_TUPLE,
-										 HEAP_USABLE_BYTES_PER_PAGE,
-										 curpages);
-			break;
+		dbms_stats_table_relation_estimate_size(rel, attr_widths, pages, tuples,
+									 allvisfrac,
+									 HEAP_OVERHEAD_BYTES_PER_TUPLE,
+									 HEAP_USABLE_BYTES_PER_PAGE,
+									 curpages);
+	}
+	else if (rel->rd_rel->relkind == RELKIND_INDEX)
+	{
+		/*
+		 * XXX: It'd probably be good to move this into a callback, individual
+		 * index types e.g. know if they have a metapage.
+		 */
 
-		case RELKIND_INDEX:
+		/* it has storage, ok to call the smgr */
+		if (curpages == InvalidBlockNumber)
+			curpages = RelationGetNumberOfBlocks(rel);
 
-			/*
-			 * XXX: It'd probably be good to move this into a callback,
-			 * individual index types e.g. know if they have a metapage.
-			 */
-
-			/* it has storage, ok to call the smgr */
-			if (curpages == InvalidBlockNumber)
-				curpages = RelationGetNumberOfBlocks(rel);
-
-			/* report estimated # pages */
-			*pages = curpages;
-			/* quick exit if rel is clearly empty */
-			if (curpages == 0)
-			{
-				*tuples = 0;
-				*allvisfrac = 0;
-				break;
-			}
-
-			/* coerce values in pg_class to more desirable types */
-			relpages = (BlockNumber) rel->rd_rel->relpages;
-			reltuples = (double) rel->rd_rel->reltuples;
-			relallvisible = (BlockNumber) rel->rd_rel->relallvisible;
-
-			/*
-			 * Discount the metapage while estimating the number of tuples.
-			 * This is a kluge because it assumes more than it ought to about
-			 * index structure.  Currently it's OK for btree, hash, and GIN
-			 * indexes but suspect for GiST indexes.
-			 */
-			if (relpages > 0)
-			{
-				curpages--;
-				relpages--;
-			}
-
-
-			/* estimate number of tuples from previous tuple density */
-			if (reltuples >= 0 && relpages > 0)
-				density = reltuples / (double) relpages;
-			else
-			{
-				/*
-				 * If we have no data because the relation was never vacuumed,
-				 * estimate tuple width from attribute datatypes.  We assume
-				 * here that the pages are completely full, which is OK for
-				 * tables (since they've presumably not been VACUUMed yet) but
-				 * is probably an overestimate for indexes.  Fortunately
-				 * get_relation_info() can clamp the overestimate to the
-				 * parent table's size.
-				 *
-				 * Note: this code intentionally disregards alignment
-				 * considerations, because (a) that would be gilding the lily
-				 * considering how crude the estimate is, and (b) it creates
-				 * platform dependencies in the default plans which are kind
-				 * of a headache for regression testing.
-				 *
-				 * XXX: Should this logic be more index specific?
-				 */
-				int32		tuple_width;
-
-				tuple_width = dbms_stats_get_rel_data_width(rel, attr_widths);
-				tuple_width += MAXALIGN(SizeofHeapTupleHeader);
-				tuple_width += sizeof(ItemIdData);
-				/* note: integer division is intentional here */
-				density = (BLCKSZ - SizeOfPageHeaderData) / tuple_width;
-			}
-			*tuples = rint(density * (double) curpages);
-
-			/*
-			 * We use relallvisible as-is, rather than scaling it up like we
-			 * do for the pages and tuples counts, on the theory that any
-			 * pages added since the last VACUUM are most likely not marked
-			 * all-visible.  But costsize.c wants it converted to a fraction.
-			 */
-			if (relallvisible == 0 || curpages <= 0)
-				*allvisfrac = 0;
-			else if ((double) relallvisible >= curpages)
-				*allvisfrac = 1;
-			else
-				*allvisfrac = (double) relallvisible / curpages;
-			break;
-
-		case RELKIND_SEQUENCE:
-			/* Sequences always have a known size */
-			*pages = 1;
-			*tuples = 1;
-			*allvisfrac = 0;
-			break;
-		case RELKIND_FOREIGN_TABLE:
-			/* Just use whatever's in pg_class */
-			*pages = rel->rd_rel->relpages;
-			*tuples = rel->rd_rel->reltuples;
-			*allvisfrac = 0;
-			break;
-		default:
-			/* else it has no disk storage; probably shouldn't get here? */
-			*pages = 0;
+		/* report estimated # pages */
+		*pages = curpages;
+		/* quick exit if rel is clearly empty */
+		if (curpages == 0)
+		{
 			*tuples = 0;
 			*allvisfrac = 0;
-			break;
+			return;
+		}
+
+		/* coerce values in pg_class to more desirable types */
+		relpages = (BlockNumber) rel->rd_rel->relpages;
+		reltuples = (double) rel->rd_rel->reltuples;
+		relallvisible = (BlockNumber) rel->rd_rel->relallvisible;
+
+		/*
+		 * Discount the metapage while estimating the number of tuples. This
+		 * is a kluge because it assumes more than it ought to about index
+		 * structure.  Currently it's OK for btree, hash, and GIN indexes but
+		 * suspect for GiST indexes.
+		 */
+		if (relpages > 0)
+		{
+			curpages--;
+			relpages--;
+		}
+
+		/* estimate number of tuples from previous tuple density */
+		if (reltuples >= 0 && relpages > 0)
+			density = reltuples / (double) relpages;
+		else
+		{
+			/*
+			 * If we have no data because the relation was never vacuumed,
+			 * estimate tuple width from attribute datatypes.  We assume here
+			 * that the pages are completely full, which is OK for tables
+			 * (since they've presumably not been VACUUMed yet) but is
+			 * probably an overestimate for indexes.  Fortunately
+			 * get_relation_info() can clamp the overestimate to the parent
+			 * table's size.
+			 *
+			 * Note: this code intentionally disregards alignment
+			 * considerations, because (a) that would be gilding the lily
+			 * considering how crude the estimate is, and (b) it creates
+			 * platform dependencies in the default plans which are kind of a
+			 * headache for regression testing.
+			 *
+			 * XXX: Should this logic be more index specific?
+			 */
+			int32		tuple_width;
+
+			tuple_width = dbms_stats_get_rel_data_width(rel, attr_widths);
+			tuple_width += MAXALIGN(SizeofHeapTupleHeader);
+			tuple_width += sizeof(ItemIdData);
+			/* note: integer division is intentional here */
+			density = (BLCKSZ - SizeOfPageHeaderData) / tuple_width;
+		}
+		*tuples = rint(density * (double) curpages);
+
+		/*
+		 * We use relallvisible as-is, rather than scaling it up like we do
+		 * for the pages and tuples counts, on the theory that any pages added
+		 * since the last VACUUM are most likely not marked all-visible.  But
+		 * costsize.c wants it converted to a fraction.
+		 */
+		if (relallvisible == 0 || curpages <= 0)
+			*allvisfrac = 0;
+		else if ((double) relallvisible >= curpages)
+			*allvisfrac = 1;
+		else
+			*allvisfrac = (double) relallvisible / curpages;
+	}
+	else
+	{
+		/*
+		 * Just use whatever's in pg_class.  This covers foreign tables,
+		 * sequences, and also relkinds without storage (shouldn't get here?);
+		 * see initializations in AddNewRelationTuple().  Note that FDW must
+		 * cope if reltuples is -1!
+		 */
+		*pages = rel->rd_rel->relpages;
+		*tuples = rel->rd_rel->reltuples;
+		*allvisfrac = 0;
 	}
 }
 
@@ -1799,18 +1776,18 @@ dbms_stats_estimate_rel_size(Relation rel, int32 *attr_widths,
  * If attr_widths isn't NULL, it points to the zero-index entry of the
  * relation's attr_widths[] cache; use and update that cache as appropriate.
  *
- * Currently we ignore dropped column_stats_effective.  Ideally those should be included
+ * Currently we ignore dropped columns.  Ideally those should be included
  * in the result, but we haven't got any way to get info about them; and
  * since they might be mostly NULLs, treating them as zero-width is not
  * necessarily the wrong thing anyway.
  *
  * Note: This function is copied from plancat.c in core source tree of version
- * 14, and just renamed.
+ * 18, and just renamed.
  */
 static int32
 dbms_stats_get_rel_data_width(Relation rel, int32 *attr_widths)
 {
-	int32		tuple_width = 0;
+	int64		tuple_width = 0;
 	int			i;
 
 	for (i = 1; i <= RelationGetNumberOfAttributes(rel); i++)
@@ -1840,7 +1817,7 @@ dbms_stats_get_rel_data_width(Relation rel, int32 *attr_widths)
 		tuple_width += item_width;
 	}
 
-	return tuple_width;
+	return clamp_width_est(tuple_width);
 }
 
 /*
@@ -1866,7 +1843,7 @@ dbms_stats_get_rel_data_width(Relation rel, int32 *attr_widths)
  * special space.
  *
  * Note: This function is copied from tableam.c in core source tree of version
- * 14, and just renamed.Changes from original one are:
+ * 18, and just renamed.Changes from original one are:
  *   - rename by prefixing dbms_stats_
  *   - add 1 parameters (curpage) to pass dummy curpage values.
  *
@@ -1945,11 +1922,21 @@ dbms_stats_table_relation_estimate_size(Relation rel, int32 *attr_widths,
 		 * and (c) different table AMs might use different padding schemes.
 		 */
 		int32	   tuple_width;
+		int			fillfactor;
+
+		/*
+		 * Without reltuples/relpages, we also need to consider fillfactor.
+		 * The other branch considers it implicitly by calculating density
+		 * from actual relpages/reltuples statistics.
+		 */
+		fillfactor = RelationGetFillFactor(rel, HEAP_DEFAULT_FILLFACTOR);
 
 		tuple_width = dbms_stats_get_rel_data_width(rel, attr_widths);
 		tuple_width += overhead_bytes_per_tuple;
 		/* note: integer division is intentional here */
-		density = usable_bytes_per_page / tuple_width;
+		density = (usable_bytes_per_page * fillfactor / 100) / tuple_width;
+		/* There's at least one row on the page, even with low fillfactor. */
+		density = clamp_row_est(density);
 	}
 	*tuples = rint(density * (double) curpages);
 
@@ -1966,6 +1953,7 @@ dbms_stats_table_relation_estimate_size(Relation rel, int32 *attr_widths,
 	else
 		*allvisfrac = (double) relallvisible / curpages;
 }
+
 
 #ifdef UNIT_TEST
 void test_pg_dbms_stats(int *passed, int *total);

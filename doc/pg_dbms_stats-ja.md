@@ -18,7 +18,7 @@
 
 </div>
 
-# pg_dbms_stats 14.0
+# pg_dbms_stats 18.0
 
 ## 名前
 
@@ -365,6 +365,11 @@ pg_dbms_stats を使用する際には、以下の使用上の注意と制約が
 対応アクセスメソッド
 - pg_dbms_statsでサポートしているオブジェクトは、テーブル/マテリアライズドビュー/Foreignテーブル/インデックスです。このうち、テーブルはheapにのみ対応しており、その他のアクセスメソッドを使うものには対応していません。
 
+PostgreSQL 18 への移行
+- このリリースの対象は PostgreSQL 18 です。`pg_upgrade` は `dbms_stats` スキーマの行をそのまま運びます。移行後、各データベースで `ALTER EXTENSION pg_dbms_stats UPDATE;` を実行し、14.0 から 18.0 へ更新してください。この更新は `dbms_stats.stats` を PostgreSQL 18 の `pg_stats` と同じ列構成にします。追加される列は `range_length_histogram`、`range_empty_frac`、`range_bounds_histogram` です。
+- `pg_dump` はロック済み統計情報もバックアップ統計情報も出力しません。これらのテーブルは拡張の設定テーブルとして登録されていません。`export_effective_stats-18.sql.sample`（または plain 版）でエクスポートし、新しいサーバで `dbms_stats.import_database_stats()` により読み込んでください。
+- ロックしたリレーションのサイズ見積もりは PostgreSQL 18 に合わせています。シーケンスは `pg_class` のページ数と行数を使います。未バキュームのテーブル（`reltuples < 0`）は fillfactor を考慮するため、fillfactor が低いテーブルでは 14.0 より行数見積もりが小さくなります。
+
 ## 詳細
 
 ### 全体構成
@@ -449,7 +454,7 @@ pg_dbms_statsの各機能は、前節で説明した独自の統計情報テー�
 ## 動作環境
 
 PostgreSQLバージョン  
-PostgreSQL 14
+PostgreSQL 18
 
 OS  
 RHEL 7/8

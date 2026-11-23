@@ -1,4 +1,4 @@
-# pg_dbms_stats 14.0
+# pg_dbms_stats 18.0
 
 [pg_dms_stats](pg_dbms_stats-ja.md) -> [Appendix A. オブジェクト一覧](objects-ja.md)
 
@@ -89,7 +89,7 @@ pg_dbms_stats は下記のビューを含みます。各ビューの意味は以
 |:-------|:---|
 |dbms_stats.relation_stats_effective |プランナに見せるテーブルごとの統計情報を表示します。PostgreSQLのpg_classカタログに対応します。|
 |dbms_stats.column_stats_effective|プランナに見せる列ごとの統計情報を表示します。PostgreSQLのpg_statisticカタログに対応します。|
-|dbms_stats.stats |プランナに見せる列ごとの統計情報のうち、ユーザが読み取り可能なものを表示します。PostgreSQLのpg_statsビューに対応します。|
+|dbms_stats.stats |プランナに見せる列ごとの統計情報のうち、ユーザが読み取り可能なものを表示します。PostgreSQL 18 の pg_stats と同じ列を持ち、range_length_histogram、range_empty_frac、range_bounds_histogram を含みます。|
 
 
 ## 関連項目

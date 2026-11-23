@@ -185,37 +185,37 @@ Triggers:
  stavalues4  | dbms_stats.anyarray |           |          |         | extended | 
  stavalues5  | dbms_stats.anyarray |           |          |         | extended | 
 View definition:
- SELECT m.starelid,
-    m.staattnum,
-    m.stainherit,
-    m.stanullfrac,
-    m.stawidth,
-    m.stadistinct,
-    m.stakind1,
-    m.stakind2,
-    m.stakind3,
-    m.stakind4,
-    m.stakind5,
-    m.staop1,
-    m.staop2,
-    m.staop3,
-    m.staop4,
-    m.staop5,
-    m.stacoll1,
-    m.stacoll2,
-    m.stacoll3,
-    m.stacoll4,
-    m.stacoll5,
-    m.stanumbers1,
-    m.stanumbers2,
-    m.stanumbers3,
-    m.stanumbers4,
-    m.stanumbers5,
-    m.stavalues1,
-    m.stavalues2,
-    m.stavalues3,
-    m.stavalues4,
-    m.stavalues5
+ SELECT starelid,
+    staattnum,
+    stainherit,
+    stanullfrac,
+    stawidth,
+    stadistinct,
+    stakind1,
+    stakind2,
+    stakind3,
+    stakind4,
+    stakind5,
+    staop1,
+    staop2,
+    staop3,
+    staop4,
+    staop5,
+    stacoll1,
+    stacoll2,
+    stacoll3,
+    stacoll4,
+    stacoll5,
+    stanumbers1,
+    stanumbers2,
+    stanumbers3,
+    stanumbers4,
+    stanumbers5,
+    stavalues1,
+    stavalues2,
+    stavalues3,
+    stavalues4,
+    stavalues5
    FROM ( SELECT (dbms_stats.merge(v.*, s.*)).starelid AS starelid,
             (dbms_stats.merge(v.*, s.*)).staattnum AS staattnum,
             (dbms_stats.merge(v.*, s.*)).stainherit AS stainherit,
@@ -252,7 +252,7 @@ View definition:
           WHERE NOT dbms_stats.is_system_catalog(starelid::regclass) AND (EXISTS ( SELECT NULL::text
                    FROM pg_attribute a
                   WHERE a.attrelid = starelid AND a.attnum = staattnum AND a.attisdropped = false))) m
-  WHERE m.starelid IS NOT NULL;
+  WHERE starelid IS NOT NULL;
 
 -- No.2-2-2
 \dS+ dbms_stats.relation_stats_effective
@@ -300,6 +300,9 @@ View definition:
  most_common_elems      | dbms_stats.anyarray |           |          |         | extended | 
  most_common_elem_freqs | real[]              |           |          |         | extended | 
  elem_count_histogram   | real[]              |           |          |         | extended | 
+ range_length_histogram | dbms_stats.anyarray |           |          |         | extended | 
+ range_empty_frac       | real                |           |          |         | plain    | 
+ range_bounds_histogram | dbms_stats.anyarray |           |          |         | extended | 
 View definition:
  SELECT n.nspname AS schemaname,
     c.relname AS tablename,
@@ -363,7 +366,31 @@ View definition:
             WHEN s.stakind4 = 5 THEN s.stanumbers4
             WHEN s.stakind5 = 5 THEN s.stanumbers5
             ELSE NULL::real[]
-        END AS elem_count_histogram
+        END AS elem_count_histogram,
+        CASE
+            WHEN s.stakind1 = 6 THEN s.stavalues1
+            WHEN s.stakind2 = 6 THEN s.stavalues2
+            WHEN s.stakind3 = 6 THEN s.stavalues3
+            WHEN s.stakind4 = 6 THEN s.stavalues4
+            WHEN s.stakind5 = 6 THEN s.stavalues5
+            ELSE NULL::dbms_stats.anyarray
+        END AS range_length_histogram,
+        CASE
+            WHEN s.stakind1 = 6 THEN s.stanumbers1[1]
+            WHEN s.stakind2 = 6 THEN s.stanumbers2[1]
+            WHEN s.stakind3 = 6 THEN s.stanumbers3[1]
+            WHEN s.stakind4 = 6 THEN s.stanumbers4[1]
+            WHEN s.stakind5 = 6 THEN s.stanumbers5[1]
+            ELSE NULL::real
+        END AS range_empty_frac,
+        CASE
+            WHEN s.stakind1 = 7 THEN s.stavalues1
+            WHEN s.stakind2 = 7 THEN s.stavalues2
+            WHEN s.stakind3 = 7 THEN s.stavalues3
+            WHEN s.stakind4 = 7 THEN s.stavalues4
+            WHEN s.stakind5 = 7 THEN s.stavalues5
+            ELSE NULL::dbms_stats.anyarray
+        END AS range_bounds_histogram
    FROM dbms_stats.column_stats_effective s
      JOIN pg_class c ON c.oid = s.starelid
      JOIN pg_attribute a ON c.oid = a.attrelid AND a.attnum = s.staattnum
@@ -411,6 +438,10 @@ Indexes:
     "column_stats_locked_pkey" PRIMARY KEY, btree (starelid, staattnum, stainherit)
 Foreign-key constraints:
     "column_stats_locked_starelid_fkey" FOREIGN KEY (starelid) REFERENCES dbms_stats.relation_stats_locked(relid) ON DELETE CASCADE
+Not-null constraints:
+    "column_stats_locked_starelid_not_null" NOT NULL "starelid"
+    "column_stats_locked_staattnum_not_null" NOT NULL "staattnum"
+    "column_stats_locked_stainherit_not_null" NOT NULL "stainherit"
 Triggers:
     invalidate_column_cache BEFORE INSERT OR DELETE OR UPDATE ON dbms_stats.column_stats_locked FOR EACH ROW EXECUTE FUNCTION dbms_stats.invalidate_column_cache()
 
@@ -431,6 +462,9 @@ Indexes:
     "relation_stats_locked_pkey" PRIMARY KEY, btree (relid)
 Referenced by:
     TABLE "dbms_stats.column_stats_locked" CONSTRAINT "column_stats_locked_starelid_fkey" FOREIGN KEY (starelid) REFERENCES dbms_stats.relation_stats_locked(relid) ON DELETE CASCADE
+Not-null constraints:
+    "relation_stats_locked_relid_not_null" NOT NULL "relid"
+    "relation_stats_locked_relname_not_null" NOT NULL "relname"
 Triggers:
     invalidate_relation_cache BEFORE INSERT OR DELETE OR UPDATE ON dbms_stats.relation_stats_locked FOR EACH ROW EXECUTE FUNCTION dbms_stats.invalidate_relation_cache()
 
@@ -1423,9 +1457,102 @@ FROM (
           AND v.staattnum = '1'::int2
           AND s.starelid = 'st0'::regclass
           AND s.staattnum = '1'::int2) as o;
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
  starelid | staattnum | stainherit | stanullfrac | stawidth | stadistinct | stakind1 | stakind2 | stakind3 | stakind4 | stakind5 | staop1 | staop2 | staop3 | staop4 | staop5 | stacoll1 | stacoll2 | stacoll3 | stacoll4 | stacoll5 | stanumbers1 | stanumbers2 | stanumbers3 | stanumbers4 | stanumbers5 | stavalues1 | stavalues2 | stavalues3 | stavalues4 | stavalues5 
 ----------+-----------+------------+-------------+----------+-------------+----------+----------+----------+----------+----------+--------+--------+--------+--------+--------+----------+----------+----------+----------+----------+-------------+-------------+-------------+-------------+-------------+------------+------------+------------+------------+------------
- st0      |         2 | t          |          -1 |       -1 |          -1 |        1 |        1 |        1 |        1 |        1 |     22 |     23 |     24 |     21 |     25 |       32 |       33 |       34 |       31 |       35 | {-1,22}     | {-1,23}     | {-1,24}     | {-1,21}     | {-1,25}     | (null)     | (null)     | {1,2}      | (null)     | (null)
+ (null)   |    (null) | (null)     |      (null) |   (null) |      (null) |   (null) |   (null) |   (null) |   (null) |   (null) | (null) | (null) | (null) | (null) | (null) |   (null) |   (null) |   (null) |   (null) |   (null) | (null)      | (null)      | (null)      | (null)      | (null)      | (null)     | (null)     | (null)     | (null)     | (null)
 (1 row)
 
 -- No.5-1-22
@@ -1465,9 +1592,102 @@ FROM (
           AND v.staattnum = '1'::int2
           AND s.starelid = 'st0'::regclass
           AND s.staattnum = '1'::int2) as o;
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
+LOG:  pg_dbms_stats: bad column type
+DETAIL:  type of column "name" has been changed
+HINT:  need to execute dbms_stats.unlock('st0', 'name')
  starelid | staattnum | stainherit | stanullfrac | stawidth | stadistinct | stakind1 | stakind2 | stakind3 | stakind4 | stakind5 | staop1 | staop2 | staop3 | staop4 | staop5 | stacoll1 | stacoll2 | stacoll3 | stacoll4 | stacoll5 | stanumbers1 | stanumbers2 | stanumbers3 | stanumbers4 | stanumbers5 | stavalues1 | stavalues2 | stavalues3 | stavalues4 | stavalues5 
 ----------+-----------+------------+-------------+----------+-------------+----------+----------+----------+----------+----------+--------+--------+--------+--------+--------+----------+----------+----------+----------+----------+-------------+-------------+-------------+-------------+-------------+------------+------------+------------+------------+------------
- st0      |         2 | t          |          -1 |       -1 |          -1 |        2 |        2 |        2 |        2 |        2 |     22 |     23 |     24 |     21 |     25 |       32 |       33 |       34 |       31 |       35 | {-1,22}     | {-1,23}     | {-1,24}     | {-1,21}     | {-1,25}     | (null)     | (null)     | {1,2}      | (null)     | (null)
+ (null)   |    (null) | (null)     |      (null) |   (null) |      (null) |   (null) |   (null) |   (null) |   (null) |   (null) | (null) | (null) | (null) | (null) | (null) |   (null) |   (null) |   (null) |   (null) |   (null) | (null)      | (null)      | (null)      | (null)      | (null)      | (null)     | (null)     | (null)     | (null)     | (null)
 (1 row)
 
 RESET client_min_messages;
@@ -2173,9 +2393,10 @@ DELETE FROM dbms_stats.relation_stats_locked;
 VACUUM dbms_stats.relation_stats_locked;  -- in order to avoid auto vacuum
 BEGIN;
 SELECT * FROM internal_locks;
- relation | mode 
-----------+------
-(0 rows)
+            relation            |      mode       
+--------------------------------+-----------------
+ dbms_stats.column_stats_locked | AccessShareLock
+(1 row)
 
 SELECT dbms_stats.restore(2, 's0.st0', NULL);
  restore 
@@ -2188,12 +2409,13 @@ SELECT * FROM internal_locks;
 ----------------------------------+------------------
  dbms_stats.backup_history        | RowShareLock
  dbms_stats.column_stats_backup   | AccessShareLock
+ dbms_stats.column_stats_locked   | AccessShareLock
  dbms_stats.column_stats_locked   | RowExclusiveLock
  dbms_stats.relation_stats_backup | AccessShareLock
  dbms_stats.relation_stats_backup | RowShareLock
  dbms_stats.relation_stats_locked | RowExclusiveLock
  dbms_stats.relation_stats_locked | RowShareLock
-(7 rows)
+(8 rows)
 
 COMMIT;
 SELECT relid::regclass FROM dbms_stats.relation_stats_locked
@@ -2239,7 +2461,7 @@ SELECT starelid, attname, stainherit FROM columns_locked_v c;
 -- No.9-1-3
 DELETE FROM dbms_stats.relation_stats_locked;
 SELECT dbms_stats.restore(2, 's00.s0', NULL);
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.restore(2, 's00.s0', NULL);
                                      ^
 SELECT count(*) FROM dbms_stats.column_stats_locked;
@@ -3981,7 +4203,7 @@ NOTICE:  arguments are st0
 
 -- No.12-3-3
 SELECT dbms_stats.lock_table_stats('s00.s0');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.lock_table_stats('s00.s0');
                                            ^
 /*
@@ -4016,7 +4238,7 @@ NOTICE:  arguments are st0, id
 
 -- No.12-5-3
 SELECT dbms_stats.lock_column_stats('s00.s0', 'id');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.lock_column_stats('s00.s0', 'id');
                                             ^
 /*
@@ -4528,7 +4750,7 @@ SELECT count(*) FROM dbms_stats.column_stats_locked;
 (1 row)
 
 SELECT dbms_stats.unlock('s00.s0');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.unlock('s00.s0');
                                  ^
 SELECT count(*) FROM dbms_stats.relation_stats_locked;
@@ -6851,7 +7073,7 @@ SELECT starelid::regclass, count(*) FROM dbms_stats.column_stats_locked
 (9 rows)
 
 SELECT dbms_stats.unlock_table_stats('s00.s0');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.unlock_table_stats('s00.s0');
                                              ^
 SELECT relid::regclass FROM dbms_stats.relation_stats_locked
@@ -8636,7 +8858,7 @@ SELECT starelid, attname, stainherit FROM columns_locked_v c;
 (19 rows)
 
 SELECT dbms_stats.unlock_column_stats('s00.s0', 'id');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.unlock_column_stats('s00.s0', 'id');
                                               ^
 SELECT starelid, attname, stainherit FROM columns_locked_v c;
@@ -10233,3 +10455,186 @@ SELECT dbms_stats.unlock('s0.st4');
 
 DROP TABLE s0.st4 CASCADE;
 NOTICE:  drop cascades to view s0.vst4
+/*
+ * No.21 PostgreSQL 18 size estimates match core for the same pg_class values.
+ */
+-- No.21-1 never-vacuumed table honors fillfactor
+CREATE TABLE s0.ff50 (id int, payload text)
+    WITH (fillfactor = 50, autovacuum_enabled = false);
+INSERT INTO s0.ff50
+    SELECT i, repeat('x', 200) FROM generate_series(1, 2000) i;
+SELECT reltuples < 0 AS never_vacuumed
+  FROM pg_class WHERE oid = 's0.ff50'::regclass;
+ never_vacuumed 
+----------------
+ t
+(1 row)
+
+SELECT dbms_stats.lock_table_stats('s0.ff50');
+ lock_table_stats 
+------------------
+ s0.ff50
+(1 row)
+
+DO $$
+DECLARE
+    line text;
+    locked_plan text;
+    core_plan text;
+BEGIN
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'on', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ff50 LOOP
+        locked_plan := line;
+        EXIT;
+    END LOOP;
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'off', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ff50 LOOP
+        core_plan := line;
+        EXIT;
+    END LOOP;
+    IF locked_plan IS DISTINCT FROM core_plan THEN
+        RAISE EXCEPTION 'fillfactor estimate mismatch: locked [%] core [%]',
+            locked_plan, core_plan;
+    END IF;
+    RAISE NOTICE 'ff50 plan: %', locked_plan;
+END $$;
+NOTICE:  ff50 plan: Seq Scan on ff50  (cost=0.00..192.34 rows=7434 width=36)
+SELECT dbms_stats.unlock('s0.ff50');
+ unlock  
+---------
+ s0.ff50
+(1 row)
+
+DROP TABLE s0.ff50;
+-- No.21-2 a sequence uses its pg_class size, including when a locked row exists
+SELECT relpages, reltuples FROM pg_class WHERE oid = 's0.ss0'::regclass;
+ relpages | reltuples 
+----------+-----------
+        1 |         1
+(1 row)
+
+INSERT INTO dbms_stats.relation_stats_locked
+    (relid, relname, relpages, reltuples, relallvisible, curpages)
+SELECT c.oid, 's0.ss0', c.relpages, c.reltuples, c.relallvisible,
+       (pg_catalog.pg_relation_size(c.oid) /
+        pg_catalog.current_setting('block_size')::int4)::int4
+  FROM pg_class c
+ WHERE c.oid = 's0.ss0'::regclass;
+DO $$
+DECLARE
+    line text;
+    locked_plan text;
+    core_plan text;
+BEGIN
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'on', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ss0 LOOP
+        locked_plan := line;
+        EXIT;
+    END LOOP;
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'off', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ss0 LOOP
+        core_plan := line;
+        EXIT;
+    END LOOP;
+    IF locked_plan IS DISTINCT FROM core_plan THEN
+        RAISE EXCEPTION 'sequence estimate mismatch: locked [%] core [%]',
+            locked_plan, core_plan;
+    END IF;
+    RAISE NOTICE 'sequence plan: %', locked_plan;
+END $$;
+NOTICE:  sequence plan: Seq Scan on ss0  (cost=0.00..1.01 rows=1 width=17)
+DELETE FROM dbms_stats.relation_stats_locked WHERE relid = 's0.ss0'::regclass;
+/*
+ * No.22 dbms_stats.stats matches pg_stats, including range columns.
+ */
+SELECT (
+    SELECT string_agg(attname, ',' ORDER BY attnum)
+      FROM pg_attribute
+     WHERE attrelid = 'dbms_stats.stats'::regclass
+       AND attnum > 0 AND NOT attisdropped
+) = (
+    SELECT string_agg(attname, ',' ORDER BY attnum)
+      FROM pg_attribute
+     WHERE attrelid = 'pg_catalog.pg_stats'::regclass
+       AND attnum > 0 AND NOT attisdropped
+) AS stats_columns_match;
+ stats_columns_match 
+---------------------
+ t
+(1 row)
+
+CREATE TABLE s0.ranges (id int, r int4range)
+    WITH (autovacuum_enabled = false);
+INSERT INTO s0.ranges
+    SELECT i, int4range(i, i + 10) FROM generate_series(1, 1000) i;
+ANALYZE s0.ranges;
+SELECT (d.range_length_histogram::text = p.range_length_histogram::text
+    AND d.range_empty_frac IS NOT DISTINCT FROM p.range_empty_frac
+    AND d.range_bounds_histogram::text = p.range_bounds_histogram::text
+    AND d.range_length_histogram IS NOT NULL
+    AND d.range_bounds_histogram IS NOT NULL) AS unlocked_range_matches_pg_stats
+  FROM dbms_stats.stats d
+  JOIN pg_catalog.pg_stats p
+    ON (d.schemaname, d.tablename, d.attname, d.inherited)
+     = (p.schemaname, p.tablename, p.attname, p.inherited)
+ WHERE d.schemaname = 's0' AND d.tablename = 'ranges' AND d.attname = 'r'
+   AND NOT d.inherited;
+ unlocked_range_matches_pg_stats 
+---------------------------------
+ t
+(1 row)
+
+SELECT dbms_stats.lock('s0.ranges', 'r');
+   lock    
+-----------
+ s0.ranges
+(1 row)
+
+-- Change the real distribution. Locked statistics must keep the range columns.
+TRUNCATE s0.ranges;
+INSERT INTO s0.ranges SELECT 1, int4range(1, 2);
+ANALYZE s0.ranges;
+SELECT (d.range_length_histogram IS NOT NULL
+    AND d.range_bounds_histogram IS NOT NULL
+    AND d.range_length_histogram::text IS DISTINCT FROM p.range_length_histogram::text
+) AS locked_range_differs_from_pg_stats
+  FROM dbms_stats.stats d
+  JOIN pg_catalog.pg_stats p
+    ON (d.schemaname, d.tablename, d.attname, d.inherited)
+     = (p.schemaname, p.tablename, p.attname, p.inherited)
+ WHERE d.schemaname = 's0' AND d.tablename = 'ranges' AND d.attname = 'r'
+   AND NOT d.inherited;
+ locked_range_differs_from_pg_stats 
+------------------------------------
+ t
+(1 row)
+
+GRANT USAGE ON SCHEMA dbms_stats TO regular_user;
+GRANT SELECT ON dbms_stats.stats TO regular_user;
+SET SESSION AUTHORIZATION regular_user;
+SELECT attname FROM dbms_stats.stats
+ WHERE schemaname = 's0' AND tablename = 'ranges'
+ ORDER BY attname;
+ attname 
+---------
+(0 rows)
+
+RESET SESSION AUTHORIZATION;
+GRANT SELECT (id) ON s0.ranges TO regular_user;
+SET SESSION AUTHORIZATION regular_user;
+SELECT attname FROM dbms_stats.stats
+ WHERE schemaname = 's0' AND tablename = 'ranges'
+ ORDER BY attname;
+ attname 
+---------
+ id
+(1 row)
+
+RESET SESSION AUTHORIZATION;
+SELECT dbms_stats.unlock('s0.ranges');
+  unlock   
+-----------
+ s0.ranges
+(1 row)
+
+DROP TABLE s0.ranges;

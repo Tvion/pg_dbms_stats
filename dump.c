@@ -12,9 +12,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
-#if PG_VERSION_NUM >= 90300
 #include "access/tupmacs.h"
-#endif
 
 
 

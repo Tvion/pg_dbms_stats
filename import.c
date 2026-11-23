@@ -17,9 +17,7 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 #include "catalog/pg_class.h"
-#if PG_VERSION_NUM >= 90300
 #include "access/htup_details.h"
-#endif
 
 #include "pg_dbms_stats.h"
 
@@ -251,7 +249,7 @@ dbms_stats_import(PG_FUNCTION_ARGS)
 						   "ON (w.nspname = cn.nspname AND w.relname = c.relname "
 							   "AND (w.attname = a.attname OR w.attname = '')) "
 						"WHERE w.nspname = $1 AND w.relname = $2 "
-						  "AND a.attnum > 0"
+						  "AND a.attnum > 0 "
 						"ORDER BY 1, 3, 2",
 				2, r_types, &c_sel_plan, values, NULL, SPI_OK_SELECT);
 
@@ -545,10 +543,7 @@ get_args(FunctionCallInfo fcinfo, char **nspname, char **relname,
 
 		if (relkind != RELKIND_RELATION && relkind != RELKIND_INDEX
 			&& relkind != RELKIND_FOREIGN_TABLE
-#if PG_VERSION_NUM >= 90300
-			&& relkind != RELKIND_MATVIEW
-#endif
-		)
+			&& relkind != RELKIND_MATVIEW)
 			elog(ERROR, "relkind of \"%s\" is \"%c\", can not import",
 				get_rel_name(relid), relkind);
 
@@ -637,15 +632,14 @@ import_stats_from_file(char *filename, char *nspname, char *relname,
 	/* Execute COPY FROM command. */
 	parsetree_list = pg_parse_query(buf.data);
 
-#if PG_VERSION_NUM >= 100000
 	{
-		/* 
-		 * parsetree_list is a list with one RawStmt since Pg10. Extract
-		 * CopyStmt to feed to DoCopy.
+		/*
+		 * parsetree_list is a list with one RawStmt. Extract CopyStmt to
+		 * feed to DoCopy.
 		 */
-		ParseState	*pstate = make_parsestate(NULL);
-		RawStmt *rstmt = (RawStmt *)linitial (parsetree_list);
-		CopyStmt *stmt = (CopyStmt *)rstmt->stmt;
+		ParseState *pstate = make_parsestate(NULL);
+		RawStmt    *rstmt = (RawStmt *) linitial(parsetree_list);
+		CopyStmt   *stmt = (CopyStmt *) rstmt->stmt;
 
 		Assert(IsA(stmt, CopyStmt));
 
@@ -653,11 +647,6 @@ import_stats_from_file(char *filename, char *nspname, char *relname,
 		DoCopy(pstate, stmt, rstmt->stmt_location, rstmt->stmt_len, &processed);
 		free_parsestate(pstate);
 	}
-#elif PG_VERSION_NUM >= 90300
-	DoCopy((CopyStmt *)linitial(parsetree_list), buf.data, &processed);
-#else
-	processed = DoCopy((CopyStmt *)linitial(parsetree_list), buf.data);
-#endif
 
 	if (processed == 0)
 		elog(ERROR, "no data to be imported");

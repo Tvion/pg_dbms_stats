@@ -217,7 +217,7 @@ CREATE VIEW dbms_stats.column_stats_effective AS
 --
 -- Note: This view is copied from pg_stats in
 -- src/backend/catalog/system_views.sql in core source tree of version
--- 9.5, and customized for pg_dbms_stats.  Changes from orignal one are:
+-- 18, and customized for pg_dbms_stats.  Changes from original one are:
 --   - rename from pg_stats to dbms_stats.stats by a view name.
 --   - changed the table name from pg_statistic to dbms_stats.column_stats_effective.
 --
@@ -278,7 +278,28 @@ CREATE VIEW dbms_stats.stats with (security_barrier) AS
             WHEN stakind3 = 5 THEN stanumbers3
             WHEN stakind4 = 5 THEN stanumbers4
             WHEN stakind5 = 5 THEN stanumbers5
-        END AS elem_count_histogram
+        END AS elem_count_histogram,
+        CASE
+            WHEN stakind1 = 6 THEN stavalues1
+            WHEN stakind2 = 6 THEN stavalues2
+            WHEN stakind3 = 6 THEN stavalues3
+            WHEN stakind4 = 6 THEN stavalues4
+            WHEN stakind5 = 6 THEN stavalues5
+        END AS range_length_histogram,
+        CASE
+            WHEN stakind1 = 6 THEN stanumbers1[1]
+            WHEN stakind2 = 6 THEN stanumbers2[1]
+            WHEN stakind3 = 6 THEN stanumbers3[1]
+            WHEN stakind4 = 6 THEN stanumbers4[1]
+            WHEN stakind5 = 6 THEN stanumbers5[1]
+        END AS range_empty_frac,
+        CASE
+            WHEN stakind1 = 7 THEN stavalues1
+            WHEN stakind2 = 7 THEN stavalues2
+            WHEN stakind3 = 7 THEN stavalues3
+            WHEN stakind4 = 7 THEN stavalues4
+            WHEN stakind5 = 7 THEN stavalues5
+        END AS range_bounds_histogram
     FROM dbms_stats.column_stats_effective s JOIN pg_class c ON (c.oid = s.starelid)
          JOIN pg_attribute a ON (c.oid = attrelid AND attnum = s.staattnum)
          LEFT JOIN pg_namespace n ON (n.oid = c.relnamespace)

@@ -70,9 +70,9 @@ $$LANGUAGE plpgsql;
 -- Since PostgreSQL14, relpages are now treated as 0 when ANALYZE is performed on an empty table.
 -- This makes the method of checking accessibility to relation_stats_locked a bit tricky.
 -- If IO was detected by pg_statio_user_tables, it returns true as previous done.
--- Otherwise, use pg_stat_user_tables. 
--- In the current test flow (ut-common.sql), relation_stats_locked has a different scan count
--- condition than column_stats_locked because it has been sequentially scanned once.
+-- Otherwise, use pg_stat_user_tables.
+-- pg_stat_reset() clears the setup scan, so a single later scan counts for both tables.
+-- Block counters are still preferred when PostgreSQL reports them.
 CREATE VIEW lockd_io AS
        SELECT t.relname,
               CASE t.relname WHEN 'relation_stats_locked' THEN
@@ -80,7 +80,7 @@ CREATE VIEW lockd_io AS
                   (io.heap_blks_read + io.heap_blks_hit + 
                    io.idx_blks_read  + io.idx_blks_hit) > 0 THEN true
                 ELSE
-                  (t.seq_scan + t.idx_scan) > 1
+                  (t.seq_scan + t.idx_scan) > 0
                 END
               ELSE
                 CASE WHEN

@@ -18,7 +18,7 @@
 
 </div>
 
-# pg_dbms_stats 14.0
+# pg_dbms_stats 18.0
 ---
 
 ## NAME
@@ -354,6 +354,11 @@ Cautions on dump and restore of the database
 Supported access methods
 - The objects supported by pg_dbms_stats are tables / materialized views / Foreign tables / indexes. Of these, the table only supports heap, not those that use other access methods.
 
+Moving a database to PostgreSQL 18
+- This release targets PostgreSQL 18. `pg_upgrade` keeps the rows in the `dbms_stats` tables. After the upgrade, run `ALTER EXTENSION pg_dbms_stats UPDATE;` in each database so the extension moves from 14.0 to 18.0. The update replaces `dbms_stats.stats` with the PostgreSQL 18 shape of `pg_stats`, adding `range_length_histogram`, `range_empty_frac`, and `range_bounds_histogram`.
+- `pg_dump` does not carry locked or backup statistics. Those tables are not registered as extension configuration. Export them with `export_effective_stats-18.sql.sample` (or the plain sample) and load them with `dbms_stats.import_database_stats()` on the new server.
+- Size estimates for a locked relation follow PostgreSQL 18. A sequence uses the `pg_class` page and tuple counts. A never-vacuumed table (`reltuples < 0`) uses the relation fillfactor, so a low fillfactor yields a lower tuple estimate than pg_dbms_stats 14.0 did.
+
 ## UNDER THE HOOD
 
 ### Outline
@@ -456,7 +461,7 @@ You can inject values by the following three steps.
 ## ENVIRONMENT
 
 PostgreSQL  
-14
+18
 
 OS  
 RHEL 7/8

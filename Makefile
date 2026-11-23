@@ -22,7 +22,8 @@ REGRESS_OPTS = --encoding=UTF8 --temp-config=regress.conf
 
 # Pick up only the install scripts needed for the PG version.
 DATA = pg_dbms_stats--$(DBMSSTATSVER).sql \
-	pg_dbms_stats--14.0--18.0.sql
+	pg_dbms_stats--14.0--18.0.sql \
+	pg_dbms_stats--1.3.7--18.0.sql
 
 DOCS = $(DOCDIR)/export_effective_stats-$(MAJORVERSION).sql.sample \
 	$(DOCDIR)/export_plain_stats-$(MAJORVERSION).sql.sample

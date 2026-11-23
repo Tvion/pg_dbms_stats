@@ -367,6 +367,24 @@ pg_dbms_stats を使用する際には、以下の使用上の注意と制約が
 
 PostgreSQL 18 への移行
 - このリリースの対象は PostgreSQL 18 です。`pg_upgrade` は `dbms_stats` スキーマの行をそのまま運びます。移行後、各データベースで `ALTER EXTENSION pg_dbms_stats UPDATE;` を実行し、14.0 から 18.0 へ更新してください。この更新は `dbms_stats.stats` を PostgreSQL 18 の `pg_stats` と同じ列構成にします。追加される列は `range_length_histogram`、`range_empty_frac`、`range_bounds_histogram` です。
+
+PostgreSQL 9.6（pg_dbms_stats 1.3.7）から PostgreSQL 18 への移行
+- `pg_upgrade` を使ってください。ロック済み統計情報とバックアップが引き継がれ、`ALTER EXTENSION pg_dbms_stats UPDATE` で 1.3.7 から 18.0 に更新されます。更新では `dbms_stats` のテーブルを 18.0 の列構成で作り直します。使用中の統計スロットには、PostgreSQL 18 の `ANALYZE` と同じく列の照合順序が設定されます。同じスクリプトは 9.1 用の 1.3.7 の列構成にも対応していますが、PostgreSQL 18 の `pg_upgrade` が受け付けるのは 9.2 以降のクラスタです。
+- 更新が終わるまで、18.0 のライブラリを `shared_preload_libraries` で読み込まないでください。18.0 のプランナフックは 18.0 の列構成を前提に `dbms_stats` のテーブルを読みます。1.3.7 のテーブルのまま事前ロードすると、ロック済みのリレーションを含む実行計画を作成した時点でサーバがクラッシュします。
+- 手順:
+    1.  旧 9.6 クラスタの全データベースで `SELECT extversion FROM pg_extension WHERE extname = 'pg_dbms_stats'` が `1.3.7` を返すことを確認します。1.3.x の古い版は、先に 9.6 上で 1.3.7 に更新してください。
+    2.  PostgreSQL 18 と pg_dbms_stats 18.0 のパッケージをインストールし、新クラスタを `initdb` します。新クラスタで `CREATE EXTENSION pg_dbms_stats` は実行しないでください。また、新しい `postgresql.conf` の `shared_preload_libraries` に `pg_dbms_stats` を含めないでください。
+    3.  旧クラスタを停止し、通常の `-b`/`-B`/`-d`/`-D` オプションで `pg_upgrade --check`、続いて `pg_upgrade` を実行します。pg_upgrade は拡張を 18.0 の共有ライブラリを使うバージョン 1.3.7 として復元し、`dbms_stats` のテーブルデータをそのまま移します。
+    4.  新クラスタを起動し、拡張を持つ全データベースで次を実行します。
+
+            ALTER EXTENSION pg_dbms_stats UPDATE;
+            SELECT extversion FROM pg_extension WHERE extname = 'pg_dbms_stats';  -- 18.0
+
+    5.  `shared_preload_libraries` に `pg_dbms_stats` を追加し、サーバを再起動します。
+    6.  pg_upgrade の案内どおり `vacuumdb --all --analyze-in-stages` を実行します。ロック済みのリレーションはロックした統計情報を使い続けます。ロックしていないテーブルは新しい統計情報になります。
+    7.  ロック済み統計情報で固定していたクエリを `EXPLAIN` するなどして、期待どおりの実行計画になることを確認します。
+- pg_upgrade はリレーションと型の OID、および列番号を維持するので、ロック済みの行は元のテーブルに対応したままです。`staop1`〜`staop5` の演算子 OID は組み込み演算子であれば有効です。ユーザ定義の演算子を使う統計情報は、PostgreSQL 18 上で `dbms_stats.lock_table_stats()` をもう一度実行してください。
+- `pg_dump` によるダンプとリストアでは 1.3.7 の統計情報を移せません。`pg_dump` は統計情報を出力しません。また、`export_effective_stats-9.6.sql.sample` で書き出したファイルには照合順序の列がないため、18.0 の `dbms_stats.import_database_stats()` では読み込めません。ダンプで移す場合は、データを投入した後に新データベースで `ANALYZE` を実行し、18.0 で改めてロックまたはバックアップしてください。
 - `pg_dump` はロック済み統計情報もバックアップ統計情報も出力しません。これらのテーブルは拡張の設定テーブルとして登録されていません。`export_effective_stats-18.sql.sample`（または plain 版）でエクスポートし、新しいサーバで `dbms_stats.import_database_stats()` により読み込んでください。
 - ロックしたリレーションのサイズ見積もりは PostgreSQL 18 に合わせています。シーケンスは `pg_class` のページ数と行数を使います。未バキュームのテーブル（`reltuples < 0`）は fillfactor を考慮するため、fillfactor が低いテーブルでは 14.0 より行数見積もりが小さくなります。
 

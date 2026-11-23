@@ -74,6 +74,7 @@ rm -rf %{buildroot}
 %defattr(0644,root,root)
 %{_datadir}/extension/pg_dbms_stats--%{version}.sql
 %{_datadir}/extension/pg_dbms_stats--14.0--18.0.sql
+%{_datadir}/extension/pg_dbms_stats--1.3.7--18.0.sql
 %{_datadir}/extension/pg_dbms_stats.control
 %{_docdir}/extension/export_effective_stats-18.sql.sample
 %{_docdir}/extension/export_plain_stats-18.sql.sample

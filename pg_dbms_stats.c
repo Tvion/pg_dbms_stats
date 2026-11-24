@@ -418,6 +418,11 @@ dbms_stats_merge(PG_FUNCTION_ARGS)
 	/* merge two statistics tuples into one, and return it */
 	ret = dbms_stats_merge_internal(&lhs, &rhs, lhsdesc, rhsdesc, retdesc);
 
+	if (lhsdesc)
+		FreeTupleDesc(lhsdesc);
+	if (rhsdesc)
+		FreeTupleDesc(rhsdesc);
+
 	if (ret)
 		PG_RETURN_DATUM(HeapTupleGetDatum(ret));
 	else

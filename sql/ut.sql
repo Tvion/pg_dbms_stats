@@ -2915,3 +2915,139 @@ ALTER TABLE dbms_stats.relation_stats_locked OWNER TO super_user;
 
 SELECT dbms_stats.unlock('s0.st4');
 DROP TABLE s0.st4 CASCADE;
+
+/*
+ * No.21 PostgreSQL 18 size estimates match core for the same pg_class values.
+ */
+-- No.21-1 never-vacuumed table honors fillfactor
+CREATE TABLE s0.ff50 (id int, payload text)
+    WITH (fillfactor = 50, autovacuum_enabled = false);
+INSERT INTO s0.ff50
+    SELECT i, repeat('x', 200) FROM generate_series(1, 2000) i;
+SELECT reltuples < 0 AS never_vacuumed
+  FROM pg_class WHERE oid = 's0.ff50'::regclass;
+SELECT dbms_stats.lock_table_stats('s0.ff50');
+DO $$
+DECLARE
+    line text;
+    locked_plan text;
+    core_plan text;
+BEGIN
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'on', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ff50 LOOP
+        locked_plan := line;
+        EXIT;
+    END LOOP;
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'off', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ff50 LOOP
+        core_plan := line;
+        EXIT;
+    END LOOP;
+    IF locked_plan IS DISTINCT FROM core_plan THEN
+        RAISE EXCEPTION 'fillfactor estimate mismatch: locked [%] core [%]',
+            locked_plan, core_plan;
+    END IF;
+    RAISE NOTICE 'ff50 plan: %', locked_plan;
+END $$;
+SELECT dbms_stats.unlock('s0.ff50');
+DROP TABLE s0.ff50;
+
+-- No.21-2 a sequence uses its pg_class size, including when a locked row exists
+SELECT relpages, reltuples FROM pg_class WHERE oid = 's0.ss0'::regclass;
+INSERT INTO dbms_stats.relation_stats_locked
+    (relid, relname, relpages, reltuples, relallvisible, curpages)
+SELECT c.oid, 's0.ss0', c.relpages, c.reltuples, c.relallvisible,
+       (pg_catalog.pg_relation_size(c.oid) /
+        pg_catalog.current_setting('block_size')::int4)::int4
+  FROM pg_class c
+ WHERE c.oid = 's0.ss0'::regclass;
+DO $$
+DECLARE
+    line text;
+    locked_plan text;
+    core_plan text;
+BEGIN
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'on', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ss0 LOOP
+        locked_plan := line;
+        EXIT;
+    END LOOP;
+    PERFORM set_config('pg_dbms_stats.use_locked_stats', 'off', true);
+    FOR line IN EXPLAIN SELECT * FROM s0.ss0 LOOP
+        core_plan := line;
+        EXIT;
+    END LOOP;
+    IF locked_plan IS DISTINCT FROM core_plan THEN
+        RAISE EXCEPTION 'sequence estimate mismatch: locked [%] core [%]',
+            locked_plan, core_plan;
+    END IF;
+    RAISE NOTICE 'sequence plan: %', locked_plan;
+END $$;
+DELETE FROM dbms_stats.relation_stats_locked WHERE relid = 's0.ss0'::regclass;
+
+/*
+ * No.22 dbms_stats.stats matches pg_stats, including range columns.
+ */
+SELECT (
+    SELECT string_agg(attname, ',' ORDER BY attnum)
+      FROM pg_attribute
+     WHERE attrelid = 'dbms_stats.stats'::regclass
+       AND attnum > 0 AND NOT attisdropped
+) = (
+    SELECT string_agg(attname, ',' ORDER BY attnum)
+      FROM pg_attribute
+     WHERE attrelid = 'pg_catalog.pg_stats'::regclass
+       AND attnum > 0 AND NOT attisdropped
+) AS stats_columns_match;
+
+CREATE TABLE s0.ranges (id int, r int4range)
+    WITH (autovacuum_enabled = false);
+INSERT INTO s0.ranges
+    SELECT i, int4range(i, i + 10) FROM generate_series(1, 1000) i;
+ANALYZE s0.ranges;
+
+SELECT (d.range_length_histogram::text = p.range_length_histogram::text
+    AND d.range_empty_frac IS NOT DISTINCT FROM p.range_empty_frac
+    AND d.range_bounds_histogram::text = p.range_bounds_histogram::text
+    AND d.range_length_histogram IS NOT NULL
+    AND d.range_bounds_histogram IS NOT NULL) AS unlocked_range_matches_pg_stats
+  FROM dbms_stats.stats d
+  JOIN pg_catalog.pg_stats p
+    ON (d.schemaname, d.tablename, d.attname, d.inherited)
+     = (p.schemaname, p.tablename, p.attname, p.inherited)
+ WHERE d.schemaname = 's0' AND d.tablename = 'ranges' AND d.attname = 'r'
+   AND NOT d.inherited;
+
+SELECT dbms_stats.lock('s0.ranges', 'r');
+-- Change the real distribution. Locked statistics must keep the range columns.
+TRUNCATE s0.ranges;
+INSERT INTO s0.ranges SELECT 1, int4range(1, 2);
+ANALYZE s0.ranges;
+
+SELECT (d.range_length_histogram IS NOT NULL
+    AND d.range_bounds_histogram IS NOT NULL
+    AND d.range_length_histogram::text IS DISTINCT FROM p.range_length_histogram::text
+) AS locked_range_differs_from_pg_stats
+  FROM dbms_stats.stats d
+  JOIN pg_catalog.pg_stats p
+    ON (d.schemaname, d.tablename, d.attname, d.inherited)
+     = (p.schemaname, p.tablename, p.attname, p.inherited)
+ WHERE d.schemaname = 's0' AND d.tablename = 'ranges' AND d.attname = 'r'
+   AND NOT d.inherited;
+
+GRANT USAGE ON SCHEMA dbms_stats TO regular_user;
+GRANT SELECT ON dbms_stats.stats TO regular_user;
+SET SESSION AUTHORIZATION regular_user;
+SELECT attname FROM dbms_stats.stats
+ WHERE schemaname = 's0' AND tablename = 'ranges'
+ ORDER BY attname;
+RESET SESSION AUTHORIZATION;
+GRANT SELECT (id) ON s0.ranges TO regular_user;
+SET SESSION AUTHORIZATION regular_user;
+SELECT attname FROM dbms_stats.stats
+ WHERE schemaname = 's0' AND tablename = 'ranges'
+ ORDER BY attname;
+RESET SESSION AUTHORIZATION;
+
+SELECT dbms_stats.unlock('s0.ranges');
+DROP TABLE s0.ranges;

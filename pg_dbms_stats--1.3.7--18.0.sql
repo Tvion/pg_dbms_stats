@@ -1,35 +1,27 @@
-/* pg_dbms_stats/pg_dbms_stats--1.3.11.sql */
-
--- complain if script is sourced in psql, rather than via CREATE EXTENSION
-\echo Use "CREATE EXTENSION pg_dbms_stats" to load this file. \quit
-
--- define alias of anyarray type because parser does not allow to use
--- anyarray in type definitions.
+-- Upgrade pg_dbms_stats 1.3.7 to 18.0.
 --
-CREATE FUNCTION dbms_stats.anyarray_in(cstring) RETURNS dbms_stats.anyarray
-    AS 'anyarray_in' LANGUAGE internal STRICT IMMUTABLE;
-CREATE FUNCTION dbms_stats.anyarray_out(dbms_stats.anyarray) RETURNS cstring
-    AS 'anyarray_out' LANGUAGE internal STRICT IMMUTABLE;
-CREATE FUNCTION dbms_stats.anyarray_recv(internal) RETURNS dbms_stats.anyarray
-    AS 'MODULE_PATHNAME', 'dbms_stats_array_recv' LANGUAGE C STRICT IMMUTABLE;
-CREATE FUNCTION dbms_stats.anyarray_send(dbms_stats.anyarray) RETURNS bytea
-    AS 'anyarray_send' LANGUAGE internal STRICT IMMUTABLE;
-CREATE TYPE dbms_stats.anyarray (
-    INPUT = dbms_stats.anyarray_in,
-    OUTPUT = dbms_stats.anyarray_out,
-    RECEIVE = dbms_stats.anyarray_recv,
-    SEND = dbms_stats.anyarray_send,
-    INTERNALLENGTH = VARIABLE,
-    ALIGNMENT = double,
-    STORAGE = extended,
-    CATEGORY = 'P'
-);
-
+-- 1.3.7 used one version number on PostgreSQL 9.1 through 9.6, with two
+-- table shapes. 9.1 has four statistic slots and no relallvisible. 9.2 through
+-- 9.6 have five slots and relallvisible, and neither shape has stacoll1-5.
+-- Those collation columns have to sit between staop5 and stanumbers1, matching
+-- pg_statistic, so the tables are rebuilt rather than extended in place.
+-- Existing locked and backup rows are copied. A used slot gets the column
+-- collation, as ANALYZE stores it, and an unused or missing slot gets 0. The
+-- routines are then replaced with the 18.0 definitions, including the range
+-- columns on dbms_stats.stats.
 --
--- User defined stats tables
---
+-- Run this before pg_dbms_stats is in shared_preload_libraries. The 18.0
+-- planner hooks read column_stats_locked with the 18.0 layout and must not
+-- see the 1.3.7 tables.
 
-CREATE TABLE dbms_stats.relation_stats_locked (
+DROP VIEW dbms_stats.stats;
+DROP VIEW dbms_stats.column_stats_effective;
+DROP VIEW dbms_stats.relation_stats_effective;
+DROP FUNCTION dbms_stats.merge(dbms_stats.column_stats_locked, pg_catalog.pg_statistic);
+DROP TRIGGER invalidate_column_cache ON dbms_stats.column_stats_locked;
+DROP TRIGGER invalidate_relation_cache ON dbms_stats.relation_stats_locked;
+
+CREATE TABLE dbms_stats.relation_stats_locked_18 (
     relid            oid    NOT NULL,
     relname          text   NOT NULL,
     relpages         int4,
@@ -38,10 +30,10 @@ CREATE TABLE dbms_stats.relation_stats_locked (
     curpages         int4,
     last_analyze     timestamp with time zone,
     last_autoanalyze timestamp with time zone,
-    PRIMARY KEY (relid)
+    CONSTRAINT relation_stats_locked_18_pkey PRIMARY KEY (relid)
 );
 
-CREATE TABLE dbms_stats.column_stats_locked (
+CREATE TABLE dbms_stats.column_stats_locked_18 (
     starelid    oid    NOT NULL,
     staattnum   int2   NOT NULL,
     stainherit  bool   NOT NULL,
@@ -73,22 +65,12 @@ CREATE TABLE dbms_stats.column_stats_locked (
     stavalues3  dbms_stats.anyarray,
     stavalues4  dbms_stats.anyarray,
     stavalues5  dbms_stats.anyarray,
-    PRIMARY KEY (starelid, staattnum, stainherit),
-    FOREIGN KEY (starelid) REFERENCES dbms_stats.relation_stats_locked (relid) ON DELETE CASCADE
+    CONSTRAINT column_stats_locked_18_pkey PRIMARY KEY (starelid, staattnum, stainherit),
+    CONSTRAINT column_stats_locked_18_starelid_fkey FOREIGN KEY (starelid)
+        REFERENCES dbms_stats.relation_stats_locked_18 (relid) ON DELETE CASCADE
 );
 
---
--- Statistics backup tables
---
-
-CREATE TABLE dbms_stats.backup_history (
-    id      serial8 PRIMARY KEY,
-    time    timestamp with time zone NOT NULL,
-    unit    char(1) NOT NULL,
-    comment text
-);
-
-CREATE TABLE dbms_stats.relation_stats_backup (
+CREATE TABLE dbms_stats.relation_stats_backup_18 (
     id               int8   NOT NULL,
     relid            oid    NOT NULL,
     relname          text   NOT NULL,
@@ -98,11 +80,12 @@ CREATE TABLE dbms_stats.relation_stats_backup (
     curpages         int4   NOT NULL,
     last_analyze     timestamp with time zone,
     last_autoanalyze timestamp with time zone,
-    PRIMARY KEY (id, relid),
-    FOREIGN KEY (id) REFERENCES dbms_stats.backup_history (id) ON DELETE CASCADE
+    CONSTRAINT relation_stats_backup_18_pkey PRIMARY KEY (id, relid),
+    CONSTRAINT relation_stats_backup_18_id_fkey FOREIGN KEY (id)
+        REFERENCES dbms_stats.backup_history (id) ON DELETE CASCADE
 );
 
-CREATE TABLE dbms_stats.column_stats_backup (
+CREATE TABLE dbms_stats.column_stats_backup_18 (
     id          int8   NOT NULL,
     statypid    oid    NOT NULL,
     starelid    oid    NOT NULL,
@@ -136,43 +119,200 @@ CREATE TABLE dbms_stats.column_stats_backup (
     stavalues3  dbms_stats.anyarray,
     stavalues4  dbms_stats.anyarray,
     stavalues5  dbms_stats.anyarray,
-    PRIMARY KEY (id, starelid, staattnum, stainherit),
-    FOREIGN KEY (id) REFERENCES dbms_stats.backup_history (id) ON DELETE CASCADE,
-    FOREIGN KEY (id, starelid) REFERENCES dbms_stats.relation_stats_backup (id, relid) ON DELETE CASCADE
+    CONSTRAINT column_stats_backup_18_pkey PRIMARY KEY (id, starelid, staattnum, stainherit),
+    CONSTRAINT column_stats_backup_18_id_fkey FOREIGN KEY (id)
+        REFERENCES dbms_stats.backup_history (id) ON DELETE CASCADE,
+    CONSTRAINT column_stats_backup_18_id_starelid_fkey FOREIGN KEY (id, starelid)
+        REFERENCES dbms_stats.relation_stats_backup_18 (id, relid) ON DELETE CASCADE
 );
+
+DO $copy$
+DECLARE
+    has_allvis boolean;
+    has_slot5 boolean;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_attribute
+         WHERE attrelid = 'dbms_stats.relation_stats_locked'::regclass
+           AND attname = 'relallvisible' AND NOT attisdropped)
+      INTO has_allvis;
+    SELECT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_attribute
+         WHERE attrelid = 'dbms_stats.column_stats_locked'::regclass
+           AND attname = 'stakind5' AND NOT attisdropped)
+      INTO has_slot5;
+
+    IF has_allvis THEN
+        EXECUTE $q$
+            INSERT INTO dbms_stats.relation_stats_locked_18
+            SELECT relid, relname, relpages, reltuples, relallvisible,
+                   curpages, last_analyze, last_autoanalyze
+              FROM dbms_stats.relation_stats_locked
+        $q$;
+        EXECUTE $q$
+            INSERT INTO dbms_stats.relation_stats_backup_18
+            SELECT id, relid, relname, relpages, reltuples, relallvisible,
+                   curpages, last_analyze, last_autoanalyze
+              FROM dbms_stats.relation_stats_backup
+        $q$;
+    ELSE
+        EXECUTE $q$
+            INSERT INTO dbms_stats.relation_stats_locked_18
+                (relid, relname, relpages, reltuples, curpages,
+                 last_analyze, last_autoanalyze)
+            SELECT relid, relname, relpages, reltuples, curpages,
+                   last_analyze, last_autoanalyze
+              FROM dbms_stats.relation_stats_locked
+        $q$;
+        EXECUTE $q$
+            INSERT INTO dbms_stats.relation_stats_backup_18
+                (id, relid, relname, relpages, reltuples, relallvisible,
+                 curpages, last_analyze, last_autoanalyze)
+            SELECT id, relid, relname, relpages, reltuples, 0,
+                   curpages, last_analyze, last_autoanalyze
+              FROM dbms_stats.relation_stats_backup
+        $q$;
+    END IF;
+
+    /*
+     * Since PostgreSQL 12 the planner compares slot values with stacollN, so
+     * a used slot of a collatable column needs the column collation, as
+     * ANALYZE stores it. The stacoll columns are fixed-width members of
+     * pg_statistic and must never be NULL. Unused slots get 0.
+     */
+    IF has_slot5 THEN
+        EXECUTE $q$
+            INSERT INTO dbms_stats.column_stats_locked_18
+            SELECT s.starelid, s.staattnum, s.stainherit,
+                   s.stanullfrac, s.stawidth, s.stadistinct,
+                   s.stakind1, s.stakind2, s.stakind3, s.stakind4, s.stakind5,
+                   s.staop1, s.staop2, s.staop3, s.staop4, s.staop5,
+                   CASE WHEN COALESCE(s.stakind1, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN COALESCE(s.stakind2, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN COALESCE(s.stakind3, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN COALESCE(s.stakind4, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN COALESCE(s.stakind5, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   s.stanumbers1, s.stanumbers2, s.stanumbers3, s.stanumbers4, s.stanumbers5,
+                   s.stavalues1, s.stavalues2, s.stavalues3, s.stavalues4, s.stavalues5
+              FROM dbms_stats.column_stats_locked s
+              LEFT JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = s.starelid AND a.attnum = s.staattnum
+        $q$;
+        EXECUTE $q$
+            INSERT INTO dbms_stats.column_stats_backup_18
+            SELECT s.id, s.statypid, s.starelid, s.staattnum, s.stainherit,
+                   s.stanullfrac, s.stawidth, s.stadistinct,
+                   s.stakind1, s.stakind2, s.stakind3, s.stakind4, s.stakind5,
+                   s.staop1, s.staop2, s.staop3, s.staop4, s.staop5,
+                   CASE WHEN s.stakind1 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN s.stakind2 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN s.stakind3 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN s.stakind4 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN s.stakind5 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   s.stanumbers1, s.stanumbers2, s.stanumbers3, s.stanumbers4, s.stanumbers5,
+                   s.stavalues1, s.stavalues2, s.stavalues3, s.stavalues4, s.stavalues5
+              FROM dbms_stats.column_stats_backup s
+              LEFT JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = s.starelid AND a.attnum = s.staattnum
+        $q$;
+    ELSE
+        EXECUTE $q$
+            INSERT INTO dbms_stats.column_stats_locked_18
+            SELECT s.starelid, s.staattnum, s.stainherit,
+                   s.stanullfrac, s.stawidth, s.stadistinct,
+                   s.stakind1, s.stakind2, s.stakind3, s.stakind4, 0,
+                   s.staop1, s.staop2, s.staop3, s.staop4, 0,
+                   CASE WHEN COALESCE(s.stakind1, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN COALESCE(s.stakind2, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN COALESCE(s.stakind3, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN COALESCE(s.stakind4, 0) <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   0,
+                   s.stanumbers1, s.stanumbers2, s.stanumbers3, s.stanumbers4, NULL,
+                   s.stavalues1, s.stavalues2, s.stavalues3, s.stavalues4, NULL
+              FROM dbms_stats.column_stats_locked s
+              LEFT JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = s.starelid AND a.attnum = s.staattnum
+        $q$;
+        EXECUTE $q$
+            INSERT INTO dbms_stats.column_stats_backup_18
+            SELECT s.id, s.statypid, s.starelid, s.staattnum, s.stainherit,
+                   s.stanullfrac, s.stawidth, s.stadistinct,
+                   s.stakind1, s.stakind2, s.stakind3, s.stakind4, 0,
+                   s.staop1, s.staop2, s.staop3, s.staop4, 0,
+                   CASE WHEN s.stakind1 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN s.stakind2 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN s.stakind3 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   CASE WHEN s.stakind4 <> 0 THEN COALESCE(a.attcollation, 0) ELSE 0 END,
+                   0,
+                   s.stanumbers1, s.stanumbers2, s.stanumbers3, s.stanumbers4, NULL,
+                   s.stavalues1, s.stavalues2, s.stavalues3, s.stavalues4, NULL
+              FROM dbms_stats.column_stats_backup s
+              LEFT JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = s.starelid AND a.attnum = s.staattnum
+        $q$;
+    END IF;
+END
+$copy$;
+
+DROP TABLE dbms_stats.column_stats_locked;
+DROP TABLE dbms_stats.column_stats_backup;
+DROP TABLE dbms_stats.relation_stats_locked;
+DROP TABLE dbms_stats.relation_stats_backup;
+
+ALTER TABLE dbms_stats.relation_stats_locked_18 RENAME TO relation_stats_locked;
+ALTER TABLE dbms_stats.column_stats_locked_18 RENAME TO column_stats_locked;
+ALTER TABLE dbms_stats.relation_stats_backup_18 RENAME TO relation_stats_backup;
+ALTER TABLE dbms_stats.column_stats_backup_18 RENAME TO column_stats_backup;
+
+ALTER TABLE dbms_stats.relation_stats_locked
+    RENAME CONSTRAINT relation_stats_locked_18_pkey TO relation_stats_locked_pkey;
+ALTER TABLE dbms_stats.column_stats_locked
+    RENAME CONSTRAINT column_stats_locked_18_pkey TO column_stats_locked_pkey;
+ALTER TABLE dbms_stats.column_stats_locked
+    RENAME CONSTRAINT column_stats_locked_18_starelid_fkey TO column_stats_locked_starelid_fkey;
+ALTER TABLE dbms_stats.relation_stats_backup
+    RENAME CONSTRAINT relation_stats_backup_18_pkey TO relation_stats_backup_pkey;
+ALTER TABLE dbms_stats.relation_stats_backup
+    RENAME CONSTRAINT relation_stats_backup_18_id_fkey TO relation_stats_backup_id_fkey;
+ALTER TABLE dbms_stats.column_stats_backup
+    RENAME CONSTRAINT column_stats_backup_18_pkey TO column_stats_backup_pkey;
+ALTER TABLE dbms_stats.column_stats_backup
+    RENAME CONSTRAINT column_stats_backup_18_id_fkey TO column_stats_backup_id_fkey;
+ALTER TABLE dbms_stats.column_stats_backup
+    RENAME CONSTRAINT column_stats_backup_18_id_starelid_fkey TO column_stats_backup_id_starelid_fkey;
 
 --
 -- Functions
 --
 
-CREATE FUNCTION dbms_stats.relname(nspname text, relname text)
+CREATE OR REPLACE FUNCTION dbms_stats.relname(nspname text, relname text)
 RETURNS text AS
 $$SELECT pg_catalog.quote_ident($1) || '.' || pg_catalog.quote_ident($2)$$
 LANGUAGE sql STABLE STRICT;
 
-CREATE FUNCTION dbms_stats.is_system_schema(schemaname text)
+CREATE OR REPLACE FUNCTION dbms_stats.is_system_schema(schemaname text)
 RETURNS boolean AS
 'MODULE_PATHNAME', 'dbms_stats_is_system_schema'
 LANGUAGE C IMMUTABLE STRICT;
 
-CREATE FUNCTION dbms_stats.is_system_catalog(relid regclass)
+CREATE OR REPLACE FUNCTION dbms_stats.is_system_catalog(relid regclass)
 RETURNS boolean AS
 'MODULE_PATHNAME', 'dbms_stats_is_system_catalog'
 LANGUAGE C STABLE;
 
-CREATE FUNCTION dbms_stats.is_target_relkind(relkind "char")
+CREATE OR REPLACE FUNCTION dbms_stats.is_target_relkind(relkind "char")
 RETURNS boolean AS
 $$SELECT $1 IN ('r', 'i', 'f', 'm')$$
 LANGUAGE sql STABLE;
 
-CREATE FUNCTION dbms_stats.merge(
+CREATE OR REPLACE FUNCTION dbms_stats.merge(
     lhs dbms_stats.column_stats_locked,
     rhs pg_catalog.pg_statistic
 ) RETURNS dbms_stats.column_stats_locked AS
 'MODULE_PATHNAME', 'dbms_stats_merge'
 LANGUAGE C STABLE;
 
-CREATE VIEW dbms_stats.relation_stats_effective AS
+CREATE OR REPLACE VIEW dbms_stats.relation_stats_effective AS
     SELECT
         c.oid AS relid,
         dbms_stats.relname(nspname, c.relname) AS relname,
@@ -197,7 +337,7 @@ CREATE VIEW dbms_stats.relation_stats_effective AS
      WHERE dbms_stats.is_target_relkind(c.relkind)
        AND NOT dbms_stats.is_system_schema(nspname);
 
-CREATE VIEW dbms_stats.column_stats_effective AS
+CREATE OR REPLACE VIEW dbms_stats.column_stats_effective AS
     SELECT * FROM (
         SELECT (dbms_stats.merge(v, s)).*
           FROM pg_catalog.pg_statistic s
@@ -217,11 +357,11 @@ CREATE VIEW dbms_stats.column_stats_effective AS
 --
 -- Note: This view is copied from pg_stats in
 -- src/backend/catalog/system_views.sql in core source tree of version
--- 9.5, and customized for pg_dbms_stats.  Changes from orignal one are:
+-- 18, and customized for pg_dbms_stats.  Changes from original one are:
 --   - rename from pg_stats to dbms_stats.stats by a view name.
 --   - changed the table name from pg_statistic to dbms_stats.column_stats_effective.
 --
-CREATE VIEW dbms_stats.stats with (security_barrier) AS
+CREATE OR REPLACE VIEW dbms_stats.stats with (security_barrier) AS
     SELECT
         nspname AS schemaname,
         relname AS tablename,
@@ -278,7 +418,28 @@ CREATE VIEW dbms_stats.stats with (security_barrier) AS
             WHEN stakind3 = 5 THEN stanumbers3
             WHEN stakind4 = 5 THEN stanumbers4
             WHEN stakind5 = 5 THEN stanumbers5
-        END AS elem_count_histogram
+        END AS elem_count_histogram,
+        CASE
+            WHEN stakind1 = 6 THEN stavalues1
+            WHEN stakind2 = 6 THEN stavalues2
+            WHEN stakind3 = 6 THEN stavalues3
+            WHEN stakind4 = 6 THEN stavalues4
+            WHEN stakind5 = 6 THEN stavalues5
+        END AS range_length_histogram,
+        CASE
+            WHEN stakind1 = 6 THEN stanumbers1[1]
+            WHEN stakind2 = 6 THEN stanumbers2[1]
+            WHEN stakind3 = 6 THEN stanumbers3[1]
+            WHEN stakind4 = 6 THEN stanumbers4[1]
+            WHEN stakind5 = 6 THEN stanumbers5[1]
+        END AS range_empty_frac,
+        CASE
+            WHEN stakind1 = 7 THEN stavalues1
+            WHEN stakind2 = 7 THEN stavalues2
+            WHEN stakind3 = 7 THEN stavalues3
+            WHEN stakind4 = 7 THEN stavalues4
+            WHEN stakind5 = 7 THEN stavalues5
+        END AS range_bounds_histogram
     FROM dbms_stats.column_stats_effective s JOIN pg_class c ON (c.oid = s.starelid)
          JOIN pg_attribute a ON (c.oid = attrelid AND attnum = s.staattnum)
          LEFT JOIN pg_namespace n ON (n.oid = c.relnamespace)
@@ -290,7 +451,7 @@ CREATE VIEW dbms_stats.stats with (security_barrier) AS
 -- Utility functions
 --
 
-CREATE FUNCTION dbms_stats.invalidate_relation_cache()
+CREATE OR REPLACE FUNCTION dbms_stats.invalidate_relation_cache()
     RETURNS trigger AS
     'MODULE_PATHNAME', 'dbms_stats_invalidate_relation_cache'
     LANGUAGE C;
@@ -301,7 +462,7 @@ CREATE TRIGGER invalidate_relation_cache
     ON dbms_stats.relation_stats_locked
    FOR EACH ROW EXECUTE PROCEDURE dbms_stats.invalidate_relation_cache();
 
-CREATE FUNCTION dbms_stats.invalidate_column_cache()
+CREATE OR REPLACE FUNCTION dbms_stats.invalidate_column_cache()
     RETURNS trigger AS
     'MODULE_PATHNAME', 'dbms_stats_invalidate_column_cache'
     LANGUAGE C;
@@ -316,7 +477,7 @@ CREATE TRIGGER invalidate_column_cache
 -- BACKUP_STATS: Statistics backup functions
 --
 
-CREATE FUNCTION dbms_stats.backup(
+CREATE OR REPLACE FUNCTION dbms_stats.backup(
     backup_id int8,
     relid regclass,
     attnum int2
@@ -353,7 +514,7 @@ SELECT $1;
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.backup(
+CREATE OR REPLACE FUNCTION dbms_stats.backup(
     relid regclass DEFAULT NULL,
     attname text DEFAULT NULL,
     comment text DEFAULT NULL
@@ -407,7 +568,7 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE FUNCTION dbms_stats.backup_database_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.backup_database_stats(
     comment text
 ) RETURNS int8 AS
 $$
@@ -415,7 +576,7 @@ SELECT dbms_stats.backup(NULL, NULL, $1)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.backup_schema_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.backup_schema_stats(
     schemaname text,
     comment text
 ) RETURNS int8 AS
@@ -450,7 +611,7 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE FUNCTION dbms_stats.backup_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.backup_table_stats(
     relid regclass,
     comment text
 ) RETURNS int8 AS
@@ -459,7 +620,7 @@ SELECT dbms_stats.backup($1, NULL, $2)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.backup_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.backup_table_stats(
     schemaname text,
     tablename text,
     comment text
@@ -469,7 +630,7 @@ SELECT dbms_stats.backup(dbms_stats.relname($1, $2)::regclass, NULL, $3)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.backup_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.backup_column_stats(
     relid regclass,
     attname text,
     comment text
@@ -479,7 +640,7 @@ SELECT dbms_stats.backup($1, $2, $3)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.backup_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.backup_column_stats(
     schemaname text,
     tablename text,
     attname text,
@@ -493,7 +654,7 @@ LANGUAGE sql;
 --
 -- RESTORE_STATS: Statistics restore functions
 --
-CREATE FUNCTION dbms_stats.restore(
+CREATE OR REPLACE FUNCTION dbms_stats.restore(
     backup_id int8,
     relid regclass DEFAULT NULL,
     attname text DEFAULT NULL
@@ -642,7 +803,7 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE FUNCTION dbms_stats.restore_database_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.restore_database_stats(
     as_of_timestamp timestamp with time zone
 ) RETURNS SETOF regclass AS
 $$
@@ -660,7 +821,7 @@ SELECT dbms_stats.restore(m.id, m.relid)
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.restore_schema_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.restore_schema_stats(
     schemaname text,
     as_of_timestamp timestamp with time zone
 ) RETURNS SETOF regclass AS
@@ -692,7 +853,7 @@ END;
 $$
 LANGUAGE plpgsql STRICT;
 
-CREATE FUNCTION dbms_stats.restore_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.restore_table_stats(
     relid regclass,
     as_of_timestamp timestamp with time zone
 ) RETURNS SETOF regclass AS
@@ -702,7 +863,7 @@ SELECT dbms_stats.restore(pg_catalog.max(id), $1, NULL)
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.restore_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.restore_table_stats(
     schemaname text,
     tablename text,
     as_of_timestamp timestamp with time zone
@@ -712,7 +873,7 @@ SELECT dbms_stats.restore_table_stats(dbms_stats.relname($1, $2)::regclass, $3)
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.restore_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.restore_column_stats(
     relid regclass,
     attname text,
     as_of_timestamp timestamp with time zone
@@ -723,7 +884,7 @@ SELECT dbms_stats.restore(pg_catalog.max(id), $1, $2)
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.restore_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.restore_column_stats(
     schemaname text,
     tablename text,
     attname text,
@@ -736,7 +897,7 @@ SELECT dbms_stats.restore(pg_catalog.max(id),
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.restore_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.restore_stats(
     backup_id int8
 ) RETURNS SETOF regclass AS
 $$
@@ -837,7 +998,7 @@ LANGUAGE plpgsql STRICT;
 -- LOCK_STATS: Statistics lock functions
 --
 
-CREATE FUNCTION dbms_stats.lock(
+CREATE OR REPLACE FUNCTION dbms_stats.lock(
     relid regclass,
     attname text
 ) RETURNS regclass AS
@@ -982,7 +1143,7 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE FUNCTION dbms_stats.lock(relid regclass)
+CREATE OR REPLACE FUNCTION dbms_stats.lock(relid regclass)
     RETURNS regclass AS
 $$
 DECLARE
@@ -1129,7 +1290,7 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE FUNCTION dbms_stats.lock_database_stats()
+CREATE OR REPLACE FUNCTION dbms_stats.lock_database_stats()
   RETURNS SETOF regclass AS
 $$
 SELECT dbms_stats.lock(c.oid)
@@ -1142,7 +1303,7 @@ SELECT dbms_stats.lock(c.oid)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.lock_schema_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.lock_schema_stats(
     schemaname text
 ) RETURNS SETOF regclass AS
 $$
@@ -1167,14 +1328,14 @@ END;
 $$
 LANGUAGE plpgsql STRICT;
 
-CREATE FUNCTION dbms_stats.lock_table_stats(relid regclass)
+CREATE OR REPLACE FUNCTION dbms_stats.lock_table_stats(relid regclass)
   RETURNS regclass AS
 $$
 SELECT dbms_stats.lock($1)
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.lock_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.lock_table_stats(
     schemaname text,
     tablename text
 ) RETURNS regclass AS
@@ -1183,7 +1344,7 @@ SELECT dbms_stats.lock(dbms_stats.relname($1, $2)::regclass)
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.lock_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.lock_column_stats(
     relid regclass,
     attname text
 ) RETURNS regclass AS
@@ -1192,7 +1353,7 @@ SELECT dbms_stats.lock($1, $2)
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.lock_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.lock_column_stats(
     schemaname text,
     tablename text,
     attname text
@@ -1206,7 +1367,7 @@ LANGUAGE sql STRICT;
 -- UNLOCK_STATS: Statistics unlock functions
 --
 
-CREATE FUNCTION dbms_stats.unlock(
+CREATE OR REPLACE FUNCTION dbms_stats.unlock(
     relid regclass DEFAULT NULL,
     attname text DEFAULT NULL
 ) RETURNS SETOF regclass AS
@@ -1253,7 +1414,7 @@ END;
 $$
 LANGUAGE plpgsql;
 
-CREATE FUNCTION dbms_stats.unlock_database_stats()
+CREATE OR REPLACE FUNCTION dbms_stats.unlock_database_stats()
   RETURNS SETOF regclass AS
 $$
 DECLARE
@@ -1274,7 +1435,7 @@ END;
 $$
 LANGUAGE plpgsql STRICT;
 
-CREATE FUNCTION dbms_stats.unlock_schema_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.unlock_schema_stats(
     schemaname text
 ) RETURNS SETOF regclass AS
 $$
@@ -1305,7 +1466,7 @@ END;
 $$
 LANGUAGE plpgsql STRICT;
 
-CREATE FUNCTION dbms_stats.unlock_table_stats(relid regclass)
+CREATE OR REPLACE FUNCTION dbms_stats.unlock_table_stats(relid regclass)
   RETURNS SETOF regclass AS
 $$
 DELETE FROM dbms_stats.relation_stats_locked
@@ -1314,7 +1475,7 @@ DELETE FROM dbms_stats.relation_stats_locked
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.unlock_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.unlock_table_stats(
     schemaname text,
     tablename text
 ) RETURNS SETOF regclass AS
@@ -1325,7 +1486,7 @@ DELETE FROM dbms_stats.relation_stats_locked
 $$
 LANGUAGE sql STRICT;
 
-CREATE FUNCTION dbms_stats.unlock_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.unlock_column_stats(
     relid regclass,
     attname text
 ) RETURNS SETOF regclass AS
@@ -1353,7 +1514,7 @@ END;
 $$
 LANGUAGE plpgsql STRICT;
 
-CREATE FUNCTION dbms_stats.unlock_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.unlock_column_stats(
     schemaname text,
     tablename text,
     attname text
@@ -1387,7 +1548,7 @@ LANGUAGE plpgsql STRICT;
 -- IMPORT_STATS: Statistics import functions
 --
 
-CREATE FUNCTION dbms_stats.import(
+CREATE OR REPLACE FUNCTION dbms_stats.import(
     nspname text DEFAULT NULL,
     relid regclass DEFAULT NULL,
     attname text DEFAULT NULL,
@@ -1396,14 +1557,14 @@ CREATE FUNCTION dbms_stats.import(
 'MODULE_PATHNAME', 'dbms_stats_import'
 LANGUAGE C;
 
-CREATE FUNCTION dbms_stats.import_database_stats(src text)
+CREATE OR REPLACE FUNCTION dbms_stats.import_database_stats(src text)
   RETURNS void AS
 $$
 SELECT dbms_stats.import(NULL, NULL, NULL, $1)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.import_schema_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.import_schema_stats(
     schemaname text,
     src text
 ) RETURNS void AS
@@ -1412,7 +1573,7 @@ SELECT dbms_stats.import($1, NULL, NULL, $2)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.import_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.import_table_stats(
     relid regclass,
     src text
 ) RETURNS void AS
@@ -1421,7 +1582,7 @@ SELECT dbms_stats.import(NULL, $1, NULL, $2)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.import_table_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.import_table_stats(
     schemaname text,
     tablename text,
     src text
@@ -1431,7 +1592,7 @@ SELECT dbms_stats.import(NULL, dbms_stats.relname($1, $2)::regclass, NULL, $3)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.import_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.import_column_stats(
     relid regclass,
     attname text,
     src text
@@ -1441,7 +1602,7 @@ SELECT dbms_stats.import(NULL, $1, $2, $3)
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION dbms_stats.import_column_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.import_column_stats(
     schemaname text,
     tablename text,
     attname text,
@@ -1455,7 +1616,7 @@ LANGUAGE sql;
 --
 -- PURGE_STATS: Statistics purge function
 --
-CREATE FUNCTION dbms_stats.purge_stats(
+CREATE OR REPLACE FUNCTION dbms_stats.purge_stats(
     backup_id int8,
     force bool DEFAULT false
 ) RETURNS SETOF dbms_stats.backup_history AS
@@ -1500,7 +1661,7 @@ LANGUAGE plpgsql;
 --
 -- CLEAN_STATS: Clean orphan dummy statistics
 --
-CREATE FUNCTION dbms_stats.clean_up_stats() RETURNS SETOF text AS
+CREATE OR REPLACE FUNCTION dbms_stats.clean_up_stats() RETURNS SETOF text AS
 $$
 DECLARE
 	clean_relid		Oid;
@@ -1549,12 +1710,12 @@ LANGUAGE plpgsql;
  */
 
 /* Primitive functions for tweaking statistics */
-CREATE FUNCTION dbms_stats.anyarray_basetype(dbms_stats.anyarray)
+CREATE OR REPLACE FUNCTION dbms_stats.anyarray_basetype(dbms_stats.anyarray)
 	RETURNS name
 	AS 'MODULE_PATHNAME', 'dbms_stats_anyarray_basetype'
 	LANGUAGE C STABLE;
 
-CREATE FUNCTION dbms_stats.type_is_analyzable(oid) returns bool
+CREATE OR REPLACE FUNCTION dbms_stats.type_is_analyzable(oid) returns bool
 	AS 'MODULE_PATHNAME', 'dbms_stats_type_is_analyzable'
 	LANGUAGE C STRICT STABLE;
 
@@ -1562,7 +1723,7 @@ CREATE FUNCTION dbms_stats.type_is_analyzable(oid) returns bool
  * Create and drop a cast necessary to set column values of dbms_stats.anyarray
  * type.
  */
-CREATE FUNCTION dbms_stats.prepare_statstweak(regtype)
+CREATE OR REPLACE FUNCTION dbms_stats.prepare_statstweak(regtype)
 RETURNS text AS $$
 DECLARE
   srctypname varchar;
@@ -1594,7 +1755,7 @@ EXCEPTION
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE FUNCTION dbms_stats.drop_statstweak(regtype)
+CREATE OR REPLACE FUNCTION dbms_stats.drop_statstweak(regtype)
 RETURNS text AS $$
 DECLARE
   srctypname varchar;

@@ -2,19 +2,29 @@ Preparation for make installcheck
 
 1. Install pg_dbms_stats into the target binary tree. Make sure to
    prepare the PATH environment variable properly to execute the right
-   pg_config for the version of target PostgreSQL server.
+   pg_config for PostgreSQL 18.
 
+   On Debian/Ubuntu with the PGDG apt repository:
+
+     # apt install postgresql-18 postgresql-server-dev-18 postgresql-contrib
+
+   pg_config is then /usr/lib/postgresql/18/bin/pg_config.
+   file_fdw ships in the postgresql-18 / postgresql-contrib packages.
+
+   On RPM systems with the PGDG yum repository:
+
+     # yum install postgresql18-server postgresql18-devel postgresql18-contrib
+
+   pg_config is then /usr/pgsql-18/bin/pg_config.
+
+  postgres$ export PATH=<PostgreSQL 18 bin>:$PATH
   postgres$ which pg_config
-  <somewhere bin of the target server resides>/pg_config
   postgres$ make install
 
-2. Install additionally required contrib module file_fdw. This could
-  be done for RPM installed server by installing postgresql##-contrib
-  using yum after installing additional repository.
+2. Install the additionally required contrib module file_fdw, via the
+   packages above (postgresql-contrib or postgresql18-contrib).
 
-  # yum install postgresql96-contrib
-
-3. Edit postgresql.conf so that pg_dbms stats will be automatically
+3. Edit postgresql.conf so that pg_dbms_stats will be automatically
    loaded.
 
   postgres$ echo "shared_preload_libraries = 'pg_dbms_stats'" >>  <PGDATA>/postgresql.conf

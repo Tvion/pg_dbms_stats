@@ -655,18 +655,36 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
  
 (1 row)
 
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
+ 
+(1 row)
+
 VACUUM ANALYZE;
 UPDATE dbms_stats.relation_stats_locked SET curpages = 1000
  WHERE relid = 'st1_exp'::regclass;
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -683,9 +701,21 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -696,9 +726,15 @@ SELECT relname, curpages FROM dbms_stats.relation_stats_locked
  public.st1 |       45
 (1 row)
 
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -832,16 +868,34 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
  
 (1 row)
 
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
+ 
+(1 row)
+
 ALTER TABLE s0.droptest RENAME TO test;
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -858,9 +912,21 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -871,9 +937,15 @@ SELECT * FROM s0.test
   1
 (1 row)
 
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -906,16 +978,34 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
  
 (1 row)
 
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
+ 
+(1 row)
+
 ALTER TABLE s0.droptest RENAME id TO test;
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -932,9 +1022,21 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -945,9 +1047,15 @@ SELECT * FROM s0.droptest
     1
 (1 row)
 
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -980,16 +1088,34 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
  
 (1 row)
 
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
+ 
+(1 row)
+
 ANALYZE;
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -1006,9 +1132,21 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -1019,9 +1157,15 @@ SELECT * FROM s0.droptest
   1
 (1 row)
 
-SELECT pg_sleep(1.0);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -1054,16 +1198,34 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
  
 (1 row)
 
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
+ 
+(1 row)
+
 VACUUM ANALYZE;
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -1080,9 +1242,21 @@ SELECT load_merged_stats();
  (null)
 (1 row)
 
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
 SELECT pg_stat_reset();
  pg_stat_reset 
 ---------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -1093,9 +1267,15 @@ SELECT * FROM s0.droptest
   4
 (1 row)
 
-SELECT pg_sleep(0.7);
- pg_sleep 
-----------
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_clear_snapshot();
+ pg_stat_clear_snapshot 
+------------------------
  
 (1 row)
 
@@ -1276,7 +1456,7 @@ SELECT dbms_stats.is_system_catalog('st0');
 
 -- No.6-3-3
 SELECT dbms_stats.is_system_catalog('s00.s0');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.is_system_catalog('s00.s0');
                                             ^
 -- No.6-3-4
@@ -1751,7 +1931,7 @@ NOTICE:  arguments are st0, <NULL>, comment
 
 -- No.8-4-3
 SELECT dbms_stats.backup_table_stats('s00.s0', 'comment');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.backup_table_stats('s00.s0', 'comment');
                                              ^
 /*
@@ -1789,7 +1969,7 @@ NOTICE:  arguments are st0, id, comment
 
 -- No.8-6-3
 SELECT dbms_stats.backup_column_stats('s00.s0', 'id', 'comment');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.backup_column_stats('s00.s0', 'id', 'comme...
                                               ^
 /*
@@ -1998,7 +2178,7 @@ NOTICE:  arguments are "2, st0, <NULL>"
 \set VERBOSITY default
 -- No.10-3-7
 SELECT dbms_stats.restore_table_stats('s00.s0', '2012-02-29 23:59:57');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.restore_table_stats('s00.s0', '2012-02-29 ...
                                               ^
 /*
@@ -2082,7 +2262,7 @@ NOTICE:  arguments are "2, st0, id"
 \set VERBOSITY default
 -- No.10-5-7
 SELECT dbms_stats.restore_column_stats('s00.s0', 'id', '2012-02-29 23:59:57');
-ERROR:  schema "s00" does not exist
+ERROR:  relation "s00.s0" does not exist
 LINE 1: SELECT dbms_stats.restore_column_stats('s00.s0', 'id', '2012...
                                                ^
 /*

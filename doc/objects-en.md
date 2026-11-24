@@ -1,4 +1,4 @@
-# pg_dbms_stats 14.0
+# pg_dbms_stats 18.0
 
 [pg_dms_stats](pg_dbms_stats-en.md) -> [Appendix A. Object List](objects-en.md)
 
@@ -89,7 +89,7 @@ pg_dbms_stats includes following view.
 |:---------|:------------|
 |dbms_stats.relation_stats_effective |Statistic for each table object currently planner referring. It corresponds to the PostgreSQL's pg_class catalog.|
 |dbms_stats.column_stats_effective|Statistic for each column, currently planner referring. It corresponds to the PostgreSQL's pg_statistic catalog.|
-|dbms_stats.stats |Display the statistic for all column, planner is referring. It corresponds to the PostgreSQL's pg_stat catalog.|
+|dbms_stats.stats |Display the statistic for all column, planner is referring. It has the same columns as PostgreSQL 18's pg_stats, including range_length_histogram, range_empty_frac, and range_bounds_histogram.|
 
 
 ## Related Item

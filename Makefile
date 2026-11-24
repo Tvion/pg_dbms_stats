@@ -1,7 +1,7 @@
 # pg_dbms_stats/Makefile
 
-DBMSSTATSVER = 14.0
-PGVERS = 14
+DBMSSTATSVER = 18.0
+PGVERS = 18
 
 MODULE_big = pg_dbms_stats
 OBJS = pg_dbms_stats.o dump.o import.o
@@ -21,7 +21,9 @@ EXTRA_INSTALL = contrib/file_fdw
 REGRESS_OPTS = --encoding=UTF8 --temp-config=regress.conf
 
 # Pick up only the install scripts needed for the PG version.
-DATA = pg_dbms_stats--$(DBMSSTATSVER).sql
+DATA = pg_dbms_stats--$(DBMSSTATSVER).sql \
+	pg_dbms_stats--14.0--18.0.sql \
+	pg_dbms_stats--1.3.7--18.0.sql
 
 DOCS = $(DOCDIR)/export_effective_stats-$(MAJORVERSION).sql.sample \
 	$(DOCDIR)/export_plain_stats-$(MAJORVERSION).sql.sample
@@ -34,9 +36,8 @@ STARBALLS = $(STARBALL) $(foreach v,$(PGVERS),pg_dbms_stats$(v).tar.gz)
 RPMS = $(foreach v,$(PGVERS),rpm$(v))
 
 EXTRA_CLEAN = sql/ut_anyarray-*.sql expected/ut_anyarray-*.out \
-	sql/ut_imp_exp-*.sql expected/ut_imp_exp-*.out \
-	sql/ut_fdw_init.sql expected/ut_fdw_init.out \
-	export_stats.dmp ut-fdw.csv $(STARBALLS) RPMS/*/* \
+	export_stats.dmp ut-fdw.csv doc/*.sql.sample_test \
+	$(STARBALLS) RPMS/*/* \
 	*~
 
 ifndef USE_PGXS
@@ -59,9 +60,9 @@ endif
 TARSOURCES = Makefile *.c  *.h \
 	pg_dbms_stats.control COPYRIGHT ChangeLog ChangeLog.ja \
 	README.installcheck regress.conf $(DATA) \
-	doc/* expected/init-*.out expected/ut-*.out \
-	sql/init-*.sql sql/ut-*.sql \
-	input/*.source input/*.csv output/*.source SPECS/*.spec
+	doc/* expected/*.out \
+	sql/*.sql \
+	input/*.csv SPECS/*.spec
 
 LDFLAGS+=-Wl,--build-id
 

@@ -18,7 +18,7 @@
 
 </div>
 
-# pg_dbms_stats 14.0
+# pg_dbms_stats 18.0
 ---
 
 ## NAME
@@ -354,6 +354,29 @@ Cautions on dump and restore of the database
 Supported access methods
 - The objects supported by pg_dbms_stats are tables / materialized views / Foreign tables / indexes. Of these, the table only supports heap, not those that use other access methods.
 
+Moving a database to PostgreSQL 18
+- This release targets PostgreSQL 18. `pg_upgrade` keeps the rows in the `dbms_stats` tables. After the upgrade, run `ALTER EXTENSION pg_dbms_stats UPDATE;` in each database so the extension moves from 14.0 to 18.0. The update replaces `dbms_stats.stats` with the PostgreSQL 18 shape of `pg_stats`, adding `range_length_histogram`, `range_empty_frac`, and `range_bounds_histogram`.
+- `pg_dump` does not carry locked or backup statistics. Those tables are not registered as extension configuration. Export them with `export_effective_stats-18.sql.sample` (or the plain sample) and load them with `dbms_stats.import_database_stats()` on the new server.
+
+Moving from PostgreSQL 9.6 (pg_dbms_stats 1.3.7) to PostgreSQL 18
+- Use `pg_upgrade`. It keeps the locked and backup statistics, and `ALTER EXTENSION pg_dbms_stats UPDATE` moves them from 1.3.7 to 18.0. The update rebuilds the `dbms_stats` tables in the 18.0 layout. Each used statistic slot gets the collation of its column, as `ANALYZE` stores it on PostgreSQL 18. The same script also handles the 9.1 layout of 1.3.7, but `pg_upgrade` in PostgreSQL 18 only accepts clusters from 9.2 on.
+- The 18.0 library must not be loaded through `shared_preload_libraries` until the update has run. Its planner hooks read the `dbms_stats` tables in the 18.0 layout, and a server that preloads it against the 1.3.7 tables crashes when a locked relation is planned.
+- Procedure:
+    1.  On the old 9.6 cluster, check that `SELECT extversion FROM pg_extension WHERE extname = 'pg_dbms_stats'` returns `1.3.7` in every database. Older 1.3.x versions must first be updated to 1.3.7 on 9.6.
+    2.  Install PostgreSQL 18 and the pg_dbms_stats 18.0 package. Run `initdb` for the new cluster. Do not run `CREATE EXTENSION pg_dbms_stats` there, and leave `pg_dbms_stats` out of `shared_preload_libraries` in the new `postgresql.conf`.
+    3.  Stop the old cluster and run `pg_upgrade --check`, then `pg_upgrade`, with the usual `-b`/`-B`/`-d`/`-D` options. pg_upgrade restores the extension as version 1.3.7 with the 18.0 shared library, and copies the `dbms_stats` table data as it is.
+    4.  Start the new cluster and run in every database that has the extension:
+
+            ALTER EXTENSION pg_dbms_stats UPDATE;
+            SELECT extversion FROM pg_extension WHERE extname = 'pg_dbms_stats';  -- 18.0
+
+    5.  Add `pg_dbms_stats` to `shared_preload_libraries` and restart the server.
+    6.  Run `vacuumdb --all --analyze-in-stages` as pg_upgrade suggests. Locked relations keep their locked statistics. Tables that are not locked get fresh statistics.
+    7.  Check that the expected plans come back, for example with `EXPLAIN` on the queries whose plans were fixed by locked statistics.
+- pg_upgrade keeps the OIDs of relations, types and attribute numbers, so the locked rows stay attached to their tables. The operator OIDs stored in `staop1`-`staop5` stay valid for built-in operators. For statistics that use a user-defined operator, run `dbms_stats.lock_table_stats()` again on PostgreSQL 18.
+- A dump and reload with `pg_dump` cannot move the 1.3.7 statistics. `pg_dump` does not output them, and a file written by `export_effective_stats-9.6.sql.sample` cannot be read by `dbms_stats.import_database_stats()` in 18.0 because it has no collation columns. When you move by dump, `ANALYZE` the new database once its data is loaded. Then lock or back up the statistics again with 18.0.
+- Size estimates for a locked relation follow PostgreSQL 18. A sequence uses the `pg_class` page and tuple counts. A never-vacuumed table (`reltuples < 0`) uses the relation fillfactor, so a low fillfactor yields a lower tuple estimate than pg_dbms_stats 14.0 did.
+
 ## UNDER THE HOOD
 
 ### Outline
@@ -456,7 +479,7 @@ You can inject values by the following three steps.
 ## ENVIRONMENT
 
 PostgreSQL  
-14
+18
 
 OS  
 RHEL 7/8
